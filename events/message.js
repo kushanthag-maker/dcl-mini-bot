@@ -21,8 +21,15 @@ async function handleMessage(sock, msg) {
   try {
     const from = msg.key.remoteJid;
     const isGroup = from.endsWith('@g.us');
-    const sender = isGroup ? msg.key.participant : from;
-    const senderNumber = sender?.split('@')[0] || '';
+    const isFromMe = msg.key.fromMe;
+
+    // Sender resolution (important for self-chat / fromMe)
+    let sender = isGroup ? (msg.key.participant || from) : from;
+    if (isFromMe && sock.user?.id) {
+      // When messaging from the linked number itself
+      sender = sock.user.id;
+    }
+    const senderNumber = (sender?.split('@')[0] || '').split(':')[0]; // remove device suffix
 
     // Extract text
     const messageType = Object.keys(msg.message || {})[0];
@@ -42,16 +49,16 @@ async function handleMessage(sock, msg) {
     const cmd = getCommand(commandName);
     if (!cmd) return;
 
-    // Rate limit
-    if (!checkRateLimit(sender)) {
+    // Rate limit (skip for owner)
+    const isOwner = senderNumber === config.ownerNumber || isFromMe;
+    if (!isOwner && !checkRateLimit(sender)) {
       await sock.sendMessage(from, { text: '⏳ Rate limit exceeded. Please wait a moment.' }, { quoted: msg });
       return;
     }
 
     // Owner only check
     if (cmd.ownerOnly) {
-      const owners = [config.ownerNumber];
-      if (!owners.includes(senderNumber)) {
+      if (!isOwner) {
         await sock.sendMessage(from, { text: '❌ This command is only for the bot owner.' }, { quoted: msg });
         return;
       }
@@ -63,7 +70,7 @@ async function handleMessage(sock, msg) {
       return;
     }
 
-    logger.command(commandName, senderNumber);
+    logger.command(commandName, senderNumber + (isFromMe ? ' (self)' : ''));
 
     // Execute
     await cmd.execute({
@@ -73,6 +80,8 @@ async function handleMessage(sock, msg) {
       sender,
       senderNumber,
       isGroup,
+      isFromMe,
+      isOwner,
       args,
       body,
       config,
