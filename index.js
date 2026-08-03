@@ -1,58 +1,84 @@
 /**
- * DCL MINI - Professional WhatsApp Multi-Device Bot
- * Entry Point (Heroku / Railway / Render friendly)
+ * DCL MINI - Entry Point (Heroku safe)
  */
 
-require('dotenv').config();
+console.log('[BOOT] Starting DCL MINI...');
+console.log('[BOOT] Node version:', process.version);
+console.log('[BOOT] PORT:', process.env.PORT || 'not set');
+
+try {
+  require('dotenv').config();
+  console.log('[BOOT] dotenv loaded');
+} catch (e) {
+  console.error('[BOOT] dotenv failed:', e.message);
+}
+
 const chalk = require('chalk');
 const config = require('./config');
-const { startBot } = require('./lib/bot');
+console.log('[BOOT] config loaded, mongoUri set:', !!config.mongoUri);
+
 const { startServer } = require('./lib/server');
-const logger = require('./lib/logger');
+console.log('[BOOT] server module loaded');
 
-console.log(chalk.cyan(`
-╔══════════════════════════════════════╗
-║          DCL MINI BOT v1.0           ║
-║   Multi-Device + MongoDB Session     ║
-╚══════════════════════════════════════╝
-`));
+// Start web server FIRST (critical for Heroku)
+try {
+  startServer();
+  console.log('[BOOT] Express server started');
+} catch (e) {
+  console.error('[BOOT] FATAL - server failed to start:', e);
+  setTimeout(() => process.exit(1), 3000);
+}
 
-// Critical: Start the web server FIRST so Heroku sees a bound PORT
-// and does not kill the dyno with "Application Error"
-startServer();
+// Load bot after server is up
+let startBot;
+try {
+  startBot = require('./lib/bot').startBot;
+  console.log('[BOOT] bot module loaded');
+} catch (e) {
+  console.error('[BOOT] bot module failed to load:', e.message);
+  console.error(e.stack);
+}
 
-// Start bot in background — never crash the whole process
 async function startBotSafely() {
+  if (!startBot) {
+    console.error('[BOT] startBot not available, retrying module load in 10s...');
+    setTimeout(() => {
+      try {
+        startBot = require('./lib/bot').startBot;
+        startBotSafely();
+      } catch (e) {
+        console.error('[BOT] still failed:', e.message);
+        setTimeout(startBotSafely, 15000);
+      }
+    }, 10000);
+    return;
+  }
+
   try {
-    logger.info('Starting WhatsApp connection...');
+    console.log('[BOT] Connecting to WhatsApp...');
     await startBot();
   } catch (err) {
-    logger.error('Bot failed to start (will keep retrying)', err);
+    console.error('[BOT] Failed to start:', err.message);
     global.botStatus = 'error';
     global.botError = err.message || String(err);
-    // Retry after 15 seconds without killing the process
     setTimeout(startBotSafely, 15000);
   }
 }
 
 startBotSafely();
 
-// Anti-crash — log but DO NOT exit (important for Heroku)
 process.on('uncaughtException', (err) => {
-  logger.error('Uncaught Exception (process kept alive)', err);
+  console.error('[UNCAUGHT]', err.message);
+  console.error(err.stack);
 });
+
 process.on('unhandledRejection', (reason) => {
-  logger.error('Unhandled Rejection (process kept alive)', reason);
+  console.error('[UNHANDLED REJECTION]', reason);
 });
 
-process.on('SIGINT', async () => {
-  logger.warn('SIGINT received. Shutting down...');
-  if (global.shutdownBot) await global.shutdownBot();
-  else process.exit(0);
+process.on('SIGTERM', () => {
+  console.log('[BOOT] SIGTERM received');
+  process.exit(0);
 });
 
-process.on('SIGTERM', async () => {
-  logger.warn('SIGTERM received (Heroku dyno cycling)...');
-  if (global.shutdownBot) await global.shutdownBot();
-  else process.exit(0);
-});
+console.log('[BOOT] Main script finished loading (bot starting in background)');
