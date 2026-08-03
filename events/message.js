@@ -31,6 +31,7 @@ async function handleMessage(sock, msg) {
       sender = sock.user.id;
     }
 
+    // Normalize number (remove device part after :)
     const senderNumber = (sender?.split('@')[0] || '').split(':')[0];
 
     const messageType = Object.keys(msg.message || {})[0];
