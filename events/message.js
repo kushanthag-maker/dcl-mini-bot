@@ -2,7 +2,6 @@ const config = require('../config');
 const logger = require('../lib/logger');
 const { getCommand } = require('../lib/commandHandler');
 
-// Simple in-memory rate limit
 const rateMap = new Map();
 
 function checkRateLimit(jid) {
@@ -14,30 +13,35 @@ function checkRateLimit(jid) {
   }
   entry.count++;
   rateMap.set(jid, entry);
-  return entry.count <= config.rateLimit;
+  return entry.count <= (config.rateLimit || 20);
 }
 
 async function handleMessage(sock, msg) {
   try {
-    const from = msg.key.remoteJid;
-    const isGroup = from.endsWith('@g.us');
-    const isFromMe = msg.key.fromMe;
+    if (!msg.message || !sock) return;
 
-    // Sender resolution (important for self-chat / fromMe)
+    const from = msg.key.remoteJid;
+    if (!from || from === 'status@broadcast') return;
+
+    const isGroup = from.endsWith('@g.us');
+    const isFromMe = !!msg.key.fromMe;
+
     let sender = isGroup ? (msg.key.participant || from) : from;
     if (isFromMe && sock.user?.id) {
-      // When messaging from the linked number itself
       sender = sock.user.id;
     }
-    const senderNumber = (sender?.split('@')[0] || '').split(':')[0]; // remove device suffix
 
-    // Extract text
+    const senderNumber = (sender?.split('@')[0] || '').split(':')[0];
+
     const messageType = Object.keys(msg.message || {})[0];
     let body = '';
-    if (messageType === 'conversation') body = msg.message.conversation;
+    if (messageType === 'conversation') body = msg.message.conversation || '';
     else if (messageType === 'extendedTextMessage') body = msg.message.extendedTextMessage?.text || '';
     else if (messageType === 'imageMessage') body = msg.message.imageMessage?.caption || '';
     else if (messageType === 'videoMessage') body = msg.message.videoMessage?.caption || '';
+    else if (messageType === 'buttonsResponseMessage') body = msg.message.buttonsResponseMessage?.selectedDisplayText || '';
+    else if (messageType === 'listResponseMessage') body = msg.message.listResponseMessage?.title || '';
+    else if (messageType === 'templateButtonReplyMessage') body = msg.message.templateButtonReplyMessage?.selectedDisplayText || '';
 
     body = (body || '').trim();
     if (!body.startsWith(config.prefix)) return;
@@ -49,30 +53,32 @@ async function handleMessage(sock, msg) {
     const cmd = getCommand(commandName);
     if (!cmd) return;
 
-    // Rate limit (skip for owner)
-    const isOwner = senderNumber === config.ownerNumber || isFromMe;
+    const ownerNum = (config.ownerNumber || '').replace(/[^0-9]/g, '');
+    const isOwner = isFromMe || (ownerNum && senderNumber === ownerNum);
+
     if (!isOwner && !checkRateLimit(sender)) {
-      await sock.sendMessage(from, { text: '⏳ Rate limit exceeded. Please wait a moment.' }, { quoted: msg });
+      try {
+        await sock.sendMessage(from, { text: 'Rate limit exceeded. Please wait.' }, { quoted: msg });
+      } catch {}
       return;
     }
 
-    // Owner only check
-    if (cmd.ownerOnly) {
-      if (!isOwner) {
-        await sock.sendMessage(from, { text: '❌ This command is only for the bot owner.' }, { quoted: msg });
-        return;
-      }
+    if (cmd.ownerOnly && !isOwner) {
+      try {
+        await sock.sendMessage(from, { text: 'This command is only for the bot owner.' }, { quoted: msg });
+      } catch {}
+      return;
     }
 
-    // Group only
     if (cmd.groupOnly && !isGroup) {
-      await sock.sendMessage(from, { text: '❌ This command can only be used in groups.' }, { quoted: msg });
+      try {
+        await sock.sendMessage(from, { text: 'This command can only be used in groups.' }, { quoted: msg });
+      } catch {}
       return;
     }
 
     logger.command(commandName, senderNumber + (isFromMe ? ' (self)' : ''));
 
-    // Execute
     await cmd.execute({
       sock,
       msg,
