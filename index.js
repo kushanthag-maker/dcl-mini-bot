@@ -1,6 +1,6 @@
 /**
  * DCL MINI - Professional WhatsApp Multi-Device Bot
- * Entry Point
+ * Entry Point (Heroku / Railway / Render friendly)
  */
 
 require('dotenv').config();
@@ -17,21 +17,32 @@ console.log(chalk.cyan(`
 ╚══════════════════════════════════════╝
 `));
 
-async function main() {
-  // Start pairing / dashboard website
-  startServer();
+// Critical: Start the web server FIRST so Heroku sees a bound PORT
+// and does not kill the dyno with "Application Error"
+startServer();
 
-  // Start WhatsApp bot
-  logger.info('Starting WhatsApp connection...');
-  await startBot();
+// Start bot in background — never crash the whole process
+async function startBotSafely() {
+  try {
+    logger.info('Starting WhatsApp connection...');
+    await startBot();
+  } catch (err) {
+    logger.error('Bot failed to start (will keep retrying)', err);
+    global.botStatus = 'error';
+    global.botError = err.message || String(err);
+    // Retry after 15 seconds without killing the process
+    setTimeout(startBotSafely, 15000);
+  }
 }
 
-// Anti-crash
+startBotSafely();
+
+// Anti-crash — log but DO NOT exit (important for Heroku)
 process.on('uncaughtException', (err) => {
-  logger.error('Uncaught Exception', err);
+  logger.error('Uncaught Exception (process kept alive)', err);
 });
 process.on('unhandledRejection', (reason) => {
-  logger.error('Unhandled Rejection', reason);
+  logger.error('Unhandled Rejection (process kept alive)', reason);
 });
 
 process.on('SIGINT', async () => {
@@ -40,7 +51,8 @@ process.on('SIGINT', async () => {
   else process.exit(0);
 });
 
-main().catch((err) => {
-  logger.error('Fatal error on startup', err);
-  process.exit(1);
+process.on('SIGTERM', async () => {
+  logger.warn('SIGTERM received (Heroku dyno cycling)...');
+  if (global.shutdownBot) await global.shutdownBot();
+  else process.exit(0);
 });
