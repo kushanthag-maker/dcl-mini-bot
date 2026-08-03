@@ -8,16 +8,15 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #0b0f19;
-      --card: rgba(20, 25, 40, 0.8);
-      --border: rgba(99, 102, 241, 0.3);
+      --bg: #070b14;
+      --card: rgba(18, 24, 40, 0.82);
+      --border: rgba(99, 102, 241, 0.28);
       --primary: #6366f1;
-      --primary-glow: rgba(99, 102, 241, 0.4);
+      --glow: rgba(99, 102, 241, 0.45);
       --success: #22c55e;
       --danger: #ef4444;
-      --warning: #eab308;
-      --text: #e2e8f0;
-      --muted: #94a3b8;
+      --text: #e8eefc;
+      --muted: #8b9bb8;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -25,125 +24,190 @@
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
-      background-image:
-        radial-gradient(ellipse at 15% 20%, rgba(99,102,241,0.18), transparent 50%),
-        radial-gradient(ellipse at 85% 80%, rgba(139,92,246,0.12), transparent 50%);
+      overflow-x: hidden;
     }
-    .container { max-width: 560px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
-    header { text-align: center; margin-bottom: 1.5rem; }
+    .bg-orb {
+      position: fixed; border-radius: 50%; filter: blur(80px); opacity: 0.35;
+      pointer-events: none; z-index: 0; animation: float 12s ease-in-out infinite;
+    }
+    .bg-orb.o1 { width: 320px; height: 320px; background: #4f46e5; top: -80px; left: -60px; }
+    .bg-orb.o2 { width: 280px; height: 280px; background: #7c3aed; bottom: 10%; right: -80px; animation-delay: -4s; }
+    .bg-orb.o3 { width: 200px; height: 200px; background: #2563eb; top: 45%; left: 30%; animation-delay: -7s; opacity: 0.2; }
+    @keyframes float {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      50% { transform: translate(20px, -30px) scale(1.08); }
+    }
+    .container {
+      position: relative; z-index: 1;
+      max-width: 540px; margin: 0 auto; padding: 1.75rem 1.1rem 3rem;
+    }
+    header { text-align: center; margin-bottom: 1.75rem; animation: fadeUp 0.6s ease; }
     header h1 {
-      font-size: 1.85rem; font-weight: 700;
+      font-size: 2rem; font-weight: 700; letter-spacing: -0.03em;
+      background: linear-gradient(135deg, #c7d2fe, #a78bfa, #818cf8);
+      background-size: 200% 200%;
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      animation: gradientShift 6s ease infinite;
+    }
+    @keyframes gradientShift {
+      0%, 100% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+    }
+    header p { color: var(--muted); margin-top: 0.4rem; font-size: 0.92rem; }
+    .stats {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem;
+      margin-bottom: 1.35rem; animation: fadeUp 0.7s ease 0.1s both;
+    }
+    .stat-card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 1.1rem;
+      padding: 1.15rem; text-align: center; backdrop-filter: blur(18px);
+      transition: transform 0.25s, box-shadow 0.25s;
+    }
+    .stat-card:hover { transform: translateY(-3px); box-shadow: 0 12px 30px rgba(99,102,241,0.15); }
+    .stat-card .num {
+      font-size: 2rem; font-weight: 700;
       background: linear-gradient(135deg, #a5b4fc, #c4b5fd);
       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     }
-    header p { color: var(--muted); margin-top: 0.3rem; font-size: 0.9rem; }
-
-    .stats {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1.25rem;
-    }
-    .stat-card {
-      background: var(--card); border: 1px solid var(--border); border-radius: 1rem;
-      padding: 1rem; text-align: center; backdrop-filter: blur(12px);
-    }
-    .stat-card .num { font-size: 1.75rem; font-weight: 700; color: #a5b4fc; }
-    .stat-card .label { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
-
+    .stat-card .label { font-size: 0.78rem; color: var(--muted); margin-top: 0.25rem; letter-spacing: 0.04em; text-transform: uppercase; }
     .card {
-      background: var(--card); border: 1px solid var(--border); border-radius: 1.25rem;
-      padding: 1.5rem; backdrop-filter: blur(16px);
-      box-shadow: 0 8px 32px rgba(0,0,0,0.35); margin-bottom: 1.25rem;
+      background: var(--card); border: 1px solid var(--border); border-radius: 1.35rem;
+      padding: 1.5rem; backdrop-filter: blur(20px);
+      box-shadow: 0 10px 40px rgba(0,0,0,0.35);
+      margin-bottom: 1.25rem;
+      animation: fadeUp 0.75s ease 0.15s both;
     }
-    .card h2 { font-size: 1.05rem; margin-bottom: 1rem; color: #c7d2fe; }
-
-    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.4rem; }
+    .card h2 {
+      font-size: 1rem; margin-bottom: 1.1rem; color: #c7d2fe;
+      font-weight: 600; letter-spacing: 0.02em;
+    }
+    label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 0.4rem; }
     input {
-      width: 100%; padding: 0.8rem 1rem; border-radius: 0.75rem;
-      border: 1px solid var(--border); background: rgba(15,20,35,0.85);
-      color: var(--text); font-size: 1rem; outline: none; margin-bottom: 0.85rem;
+      width: 100%; padding: 0.85rem 1rem; border-radius: 0.8rem;
+      border: 1px solid var(--border); background: rgba(10, 14, 26, 0.9);
+      color: var(--text); font-size: 0.98rem; outline: none;
+      margin-bottom: 0.9rem; transition: border-color 0.2s, box-shadow 0.2s;
     }
-    input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-glow); }
-
+    input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--glow);
+    }
+    .hint { font-size: 0.78rem; color: var(--muted); margin-top: -0.55rem; margin-bottom: 0.9rem; }
     .btn {
-      width: 100%; padding: 0.9rem; border: none; border-radius: 0.75rem;
-      font-weight: 600; font-size: 1rem; cursor: pointer;
-      background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white;
-      transition: transform 0.15s, box-shadow 0.15s;
+      width: 100%; padding: 0.95rem; border: none; border-radius: 0.8rem;
+      font-weight: 600; font-size: 0.98rem; cursor: pointer;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: white; position: relative; overflow: hidden;
+      transition: transform 0.2s, box-shadow 0.2s;
     }
-    .btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px var(--primary-glow); }
-    .btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
-    .btn-danger {
-      background: transparent; border: 1px solid rgba(239,68,68,0.5); color: #fca5a5;
-      padding: 0.4rem 0.75rem; font-size: 0.8rem; width: auto; margin-top: 0;
+    .btn::after {
+      content: ''; position: absolute; inset: 0;
+      background: linear-gradient(120deg, transparent, rgba(255,255,255,0.15), transparent);
+      transform: translateX(-100%); transition: transform 0.5s;
     }
-
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 28px var(--glow); }
+    .btn:hover::after { transform: translateX(100%); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
     .code-box {
-      display: none; text-align: center; margin-top: 1rem; padding: 1.1rem;
-      background: rgba(99,102,241,0.12); border-radius: 1rem; border: 1px dashed var(--primary);
+      display: none; text-align: center; margin-top: 1.1rem; padding: 1.2rem;
+      background: rgba(99,102,241,0.1); border-radius: 1rem;
+      border: 1px dashed rgba(99,102,241,0.5);
     }
-    .code-box.show { display: block; animation: fadeIn 0.35s ease; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    .code-box.show { display: block; animation: scaleIn 0.4s ease; }
+    @keyframes scaleIn {
+      from { opacity: 0; transform: scale(0.92); }
+      to { opacity: 1; transform: scale(1); }
+    }
     .pairing-code {
-      font-size: 1.85rem; font-weight: 700; letter-spacing: 0.2em;
-      color: #a5b4fc; margin: 0.4rem 0; font-variant-numeric: tabular-nums;
+      font-size: 1.9rem; font-weight: 700; letter-spacing: 0.22em;
+      color: #a5b4fc; margin: 0.5rem 0; font-variant-numeric: tabular-nums;
     }
-
+    .btn-ghost {
+      background: transparent; border: 1px solid var(--border); color: var(--text);
+      margin-top: 0.5rem; box-shadow: none;
+    }
+    .btn-ghost:hover { background: rgba(99,102,241,0.12); box-shadow: none; }
     .msg {
-      margin-top: 0.85rem; padding: 0.7rem; border-radius: 0.6rem;
-      font-size: 0.88rem; display: none;
+      margin-top: 0.9rem; padding: 0.75rem 0.9rem; border-radius: 0.7rem;
+      font-size: 0.88rem; display: none; animation: fadeUp 0.3s ease;
     }
-    .msg.error { display: block; background: rgba(239,68,68,0.15); color: #fca5a5; }
-    .msg.success { display: block; background: rgba(34,197,94,0.15); color: #86efac; }
-    .msg.info { display: block; background: rgba(99,102,241,0.15); color: #a5b4fc; }
-
-    .session-list { display: flex; flex-direction: column; gap: 0.65rem; }
+    .msg.error { display: block; background: rgba(239,68,68,0.12); color: #fca5a5; border: 1px solid rgba(239,68,68,0.25); }
+    .msg.success { display: block; background: rgba(34,197,94,0.12); color: #86efac; border: 1px solid rgba(34,197,94,0.25); }
+    .msg.info { display: block; background: rgba(99,102,241,0.12); color: #a5b4fc; border: 1px solid rgba(99,102,241,0.25); }
+    .session-list { display: flex; flex-direction: column; gap: 0.7rem; }
     .session-item {
-      background: rgba(15,20,35,0.6); border: 1px solid var(--border);
-      border-radius: 0.85rem; padding: 0.85rem 1rem;
-      display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;
+      background: rgba(10, 14, 26, 0.7); border: 1px solid var(--border);
+      border-radius: 0.9rem; padding: 0.9rem 1rem;
+      display: flex; justify-content: space-between; align-items: center;
+      transition: border-color 0.2s, transform 0.2s;
+      animation: fadeUp 0.4s ease;
     }
+    .session-item:hover { border-color: rgba(99,102,241,0.5); transform: translateX(3px); }
     .session-item .info { flex: 1; min-width: 0; }
-    .session-item .id { font-weight: 600; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .session-item .meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem; }
-    .badge {
-      display: inline-block; padding: 0.2rem 0.55rem; border-radius: 999px;
-      font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+    .session-item .id {
+      font-weight: 600; font-size: 0.9rem;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .badge.online { background: rgba(34,197,94,0.2); color: #86efac; }
+    .session-item .meta { font-size: 0.74rem; color: var(--muted); margin-top: 0.2rem; display: flex; align-items: center; gap: 0.5rem; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      padding: 0.2rem 0.55rem; border-radius: 999px;
+      font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+    }
+    .badge::before {
+      content: ''; width: 6px; height: 6px; border-radius: 50%;
+      background: currentColor;
+    }
+    .badge.online { background: rgba(34,197,94,0.15); color: #86efac; }
+    .badge.online::before { animation: pulse 1.5s infinite; }
     .badge.connecting, .badge.waiting_qr, .badge.waiting_pair, .badge.reconnecting {
-      background: rgba(234,179,8,0.2); color: #fde68a;
+      background: rgba(234,179,8,0.15); color: #fde68a;
     }
     .badge.offline, .badge.error, .badge.not_started {
-      background: rgba(239,68,68,0.15); color: #fca5a5;
+      background: rgba(239,68,68,0.12); color: #fca5a5;
     }
-
-    .empty { text-align: center; color: var(--muted); padding: 1.25rem; font-size: 0.9rem; }
-    footer { text-align: center; margin-top: 1.5rem; color: var(--muted); font-size: 0.78rem; }
-    .hint { font-size: 0.8rem; color: var(--muted); margin-top: -0.5rem; margin-bottom: 0.85rem; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+    }
+    .empty { text-align: center; color: var(--muted); padding: 1.4rem; font-size: 0.9rem; }
+    footer {
+      text-align: center; margin-top: 1.75rem; color: var(--muted);
+      font-size: 0.75rem; animation: fadeUp 0.8s ease 0.3s both;
+    }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(14px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
   </style>
 </head>
 <body>
+  <div class="bg-orb o1"></div>
+  <div class="bg-orb o2"></div>
+  <div class="bg-orb o3"></div>
+
   <div class="container">
     <header>
       <h1>DCL MINI</h1>
-      <p>Multi-Device • Multi-Session Bot Manager</p>
+      <p>Multi-Device Session Manager</p>
     </header>
 
     <div class="stats">
       <div class="stat-card">
         <div class="num" id="onlineCount">0</div>
-        <div class="label">Online Bots</div>
+        <div class="label">Online</div>
       </div>
       <div class="stat-card">
         <div class="num" id="totalCount">0</div>
-        <div class="label">Total Sessions</div>
+        <div class="label">Sessions</div>
       </div>
     </div>
 
     <div class="card">
-      <h2>➕ Pair New Bot</h2>
-      <label for="sessionId">Session ID (optional – unique name)</label>
-      <input type="text" id="sessionId" placeholder="e.g. shop-bot / mybot1" />
-      <p class="hint">Leave empty to auto-generate. Use different ID for each number.</p>
+      <h2>Pair New Bot</h2>
+      <label for="sessionId">Session ID (optional)</label>
+      <input type="text" id="sessionId" placeholder="shop-bot / mybot1" />
+      <p class="hint">Leave empty to auto-generate. Use a different ID for each number.</p>
 
       <label for="phone">Phone Number (country code, no +)</label>
       <input type="tel" id="phone" placeholder="94771234567" autocomplete="tel" />
@@ -151,40 +215,38 @@
       <button class="btn" id="btnPair" onclick="doPair()">Generate Pairing Code</button>
 
       <div class="code-box" id="codeBox">
-        <div style="color:var(--muted);font-size:0.85rem;">Enter this code in WhatsApp → Linked Devices</div>
+        <div style="color:var(--muted);font-size:0.84rem;">Enter this code in WhatsApp → Linked Devices</div>
         <div class="pairing-code" id="pairingCode">----</div>
-        <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;" id="activeSessionLabel"></div>
-        <button class="btn" style="background:transparent;border:1px solid var(--border);color:var(--text);margin-top:0.4rem;" onclick="copyCode()">Copy Code</button>
+        <div style="font-size:0.78rem;color:var(--muted);margin-bottom:0.4rem;" id="activeSessionLabel"></div>
+        <button class="btn btn-ghost" onclick="copyCode()">Copy Code</button>
       </div>
 
       <div class="msg" id="message"></div>
     </div>
 
     <div class="card">
-      <h2>🤖 Active Bots</h2>
+      <h2>Active Sessions</h2>
       <div class="session-list" id="sessionList">
         <div class="empty">No sessions yet. Pair a bot above.</div>
       </div>
     </div>
 
     <footer>
-      MongoDB Multi-Session • Auto Reconnect<br>
-      DCL MINI © 2026
+      MongoDB Multi-Session · Auto Reconnect<br>
+      DCL MINI
     </footer>
   </div>
 
   <script>
-    let lastSessionId = null;
-
-    function showMsg(text, type = 'info') {
+    function showMsg(text, type) {
       const el = document.getElementById('message');
       el.textContent = text;
-      el.className = 'msg ' + type;
+      el.className = 'msg ' + (type || 'info');
     }
 
     function statusBadge(status) {
       const s = status || 'not_started';
-      return '<span class="badge ' + s + '">' + s.replace('_', ' ') + '</span>';
+      return '<span class="badge ' + s + '">' + s.replace(/_/g, ' ') + '</span>';
     }
 
     async function refresh() {
@@ -200,15 +262,16 @@
           return;
         }
 
-        list.innerHTML = data.sessions.map(s => {
-          const userLabel = s.user?.id ? s.user.id.split(':')[0].split('@')[0] : '—';
+        list.innerHTML = data.sessions.map(function (s) {
+          var userLabel = s.user && s.user.id
+            ? s.user.id.split(':')[0].split('@')[0]
+            : '—';
           return (
             '<div class="session-item">' +
               '<div class="info">' +
                 '<div class="id">' + s.sessionId + '</div>' +
-                '<div class="meta">' + statusBadge(s.status) + ' &nbsp; ' + userLabel + '</div>' +
+                '<div class="meta">' + statusBadge(s.status) + '<span>' + userLabel + '</span></div>' +
               '</div>' +
-              '<button class="btn btn-danger" onclick="stopSession(\'' + s.sessionId + '\')">Stop</button>' +
             '</div>'
           );
         }).join('');
@@ -216,35 +279,34 @@
     }
 
     async function doPair() {
-      const phone = document.getElementById('phone').value.trim().replace(/[^0-9]/g, '');
-      let sessionId = document.getElementById('sessionId').value.trim();
+      var phone = document.getElementById('phone').value.trim().replace(/[^0-9]/g, '');
+      var sessionId = document.getElementById('sessionId').value.trim();
 
       if (phone.length < 10) {
-        showMsg('Please enter a valid phone number with country code', 'error');
+        showMsg('Enter a valid phone number with country code', 'error');
         return;
       }
 
-      const btn = document.getElementById('btnPair');
+      var btn = document.getElementById('btnPair');
       btn.disabled = true;
       btn.textContent = 'Generating...';
-      showMsg('Creating session & generating code...', 'info');
+      showMsg('Creating session and generating code...', 'info');
 
       try {
-        const res = await fetch('/api/pair', {
+        var res = await fetch('/api/pair', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ phone, sessionId: sessionId || undefined })
+          body: JSON.stringify({ phone: phone, sessionId: sessionId || undefined })
         });
-        const data = await res.json();
+        var data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed');
 
-        lastSessionId = data.sessionId;
         document.getElementById('sessionId').value = data.sessionId;
         document.getElementById('pairingCode').textContent =
-          data.code.match(/.{1,4}/g)?.join('-') || data.code;
+          (data.code.match(/.{1,4}/g) || [data.code]).join('-');
         document.getElementById('activeSessionLabel').textContent = 'Session: ' + data.sessionId;
         document.getElementById('codeBox').classList.add('show');
-        showMsg('Pairing code ready! Enter it in WhatsApp → Linked Devices → Link with phone number.', 'success');
+        showMsg('Code ready. Open WhatsApp → Linked Devices → Link with phone number.', 'success');
         refresh();
       } catch (err) {
         showMsg(err.message || 'Error generating code', 'error');
@@ -255,23 +317,10 @@
     }
 
     function copyCode() {
-      const code = document.getElementById('pairingCode').textContent.replace(/-/g, '');
-      navigator.clipboard.writeText(code).then(() => showMsg('Code copied!', 'success'));
-    }
-
-    async function stopSession(id) {
-      if (!confirm('Stop session "' + id + '"?')) return;
-      try {
-        await fetch('/api/session/stop', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId: id })
-        });
-        showMsg('Session stopped: ' + id, 'info');
-        refresh();
-      } catch (e) {
-        showMsg('Failed to stop session', 'error');
-      }
+      var code = document.getElementById('pairingCode').textContent.replace(/-/g, '');
+      navigator.clipboard.writeText(code).then(function () {
+        showMsg('Code copied to clipboard', 'success');
+      });
     }
 
     refresh();
