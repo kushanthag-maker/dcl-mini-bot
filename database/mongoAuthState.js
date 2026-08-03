@@ -1,7 +1,6 @@
 /**
  * MongoDB Auth State for Baileys
- * Saves session credentials & keys to MongoDB instead of local files.
- * Supports multi-session via unique sessionId.
+ * Compatible with mongodb driver v6
  */
 
 const { MongoClient } = require('mongodb');
@@ -10,48 +9,62 @@ const chalk = require('chalk');
 
 let client = null;
 let db = null;
+let connecting = null;
 
-/**
- * Connect to MongoDB (singleton)
- */
 async function connectMongo(uri) {
-  if (client && client.topology && client.topology.isConnected()) {
-    return db;
+  if (db && client) {
+    try {
+      // ping to verify connection is alive (works on driver 6)
+      await client.db('admin').command({ ping: 1 });
+      return db;
+    } catch (e) {
+      // connection dead — reconnect
+      try { await client.close(); } catch (e2) {}
+      client = null;
+      db = null;
+    }
   }
-  try {
-    client = new MongoClient(uri, {
-      maxPoolSize: 10,
-      serverSelectionTimeoutMS: 10000,
-    });
-    await client.connect();
-    db = client.db('dcl_mini_bot');
-    console.log(chalk.green('[MongoDB] Connected successfully'));
-    return db;
-  } catch (err) {
-    console.error(chalk.red('[MongoDB] Connection failed:'), err.message);
-    throw err;
-  }
+
+  if (connecting) return connecting;
+
+  connecting = (async function () {
+    try {
+      client = new MongoClient(uri, {
+        maxPoolSize: 10,
+        serverSelectionTimeoutMS: 15000,
+        connectTimeoutMS: 15000,
+      });
+      await client.connect();
+      db = client.db('dcl_mini_bot');
+      console.log(chalk.green('[MongoDB] Connected successfully'));
+      connecting = null;
+      return db;
+    } catch (err) {
+      connecting = null;
+      client = null;
+      db = null;
+      console.error(chalk.red('[MongoDB] Connection failed:'), err.message);
+      throw err;
+    }
+  })();
+
+  return connecting;
 }
 
-/**
- * useMongoAuthState - Baileys compatible auth state stored in MongoDB
- * @param {string} mongoUri 
- * @param {string} sessionId Unique session identifier
- */
-async function useMongoAuthState(mongoUri, sessionId = 'default') {
-  const database = await connectMongo(mongoUri);
-  const collection = database.collection('sessions');
+async function useMongoAuthState(mongoUri, sessionId) {
+  sessionId = sessionId || 'default';
+  var database = await connectMongo(mongoUri);
+  var collection = database.collection('sessions');
 
-  // Ensure index for fast lookup
-  await collection.createIndex({ sessionId: 1, key: 1 }, { unique: true }).catch(() => {});
+  await collection.createIndex({ sessionId: 1, key: 1 }, { unique: true }).catch(function () {});
 
-  const writeData = async (key, data) => {
+  var writeData = async function (key, data) {
     await collection.updateOne(
-      { sessionId, key },
+      { sessionId: sessionId, key: key },
       {
         $set: {
-          sessionId,
-          key,
+          sessionId: sessionId,
+          key: key,
           data: JSON.stringify(data, BufferJSON.replacer),
           updatedAt: new Date(),
         },
@@ -60,43 +73,46 @@ async function useMongoAuthState(mongoUri, sessionId = 'default') {
     );
   };
 
-  const readData = async (key) => {
-    const doc = await collection.findOne({ sessionId, key });
+  var readData = async function (key) {
+    var doc = await collection.findOne({ sessionId: sessionId, key: key });
     if (!doc || !doc.data) return null;
     try {
       return JSON.parse(doc.data, BufferJSON.reviver);
-    } catch {
+    } catch (e) {
       return null;
     }
   };
 
-  const removeData = async (key) => {
-    await collection.deleteOne({ sessionId, key });
+  var removeData = async function (key) {
+    await collection.deleteOne({ sessionId: sessionId, key: key });
   };
 
-  // Load or init credentials
-  const creds = (await readData('creds')) || initAuthCreds();
+  var creds = (await readData('creds')) || initAuthCreds();
 
   return {
     state: {
-      creds,
+      creds: creds,
       keys: {
-        get: async (type, ids) => {
-          const data = {};
+        get: async function (type, ids) {
+          var data = {};
           await Promise.all(
-            ids.map(async (id) => {
-              const value = await readData(`${type}-${id}`);
+            ids.map(async function (id) {
+              var value = await readData(type + '-' + id);
               if (value) data[id] = value;
             })
           );
           return data;
         },
-        set: async (data) => {
-          const tasks = [];
-          for (const category of Object.keys(data)) {
-            for (const id of Object.keys(data[category])) {
-              const value = data[category][id];
-              const key = `${category}-${id}`;
+        set: async function (data) {
+          var tasks = [];
+          var categories = Object.keys(data);
+          for (var i = 0; i < categories.length; i++) {
+            var category = categories[i];
+            var ids = Object.keys(data[category]);
+            for (var j = 0; j < ids.length; j++) {
+              var id = ids[j];
+              var value = data[category][id];
+              var key = category + '-' + id;
               tasks.push(value ? writeData(key, value) : removeData(key));
             }
           }
@@ -104,19 +120,16 @@ async function useMongoAuthState(mongoUri, sessionId = 'default') {
         },
       },
     },
-    saveCreds: async () => {
+    saveCreds: async function () {
       await writeData('creds', creds);
     },
-    clearSession: async () => {
-      await collection.deleteMany({ sessionId });
-      console.log(chalk.yellow(`[MongoDB] Session ${sessionId} cleared`));
+    clearSession: async function () {
+      await collection.deleteMany({ sessionId: sessionId });
+      console.log(chalk.yellow('[MongoDB] Session ' + sessionId + ' cleared'));
     },
   };
 }
 
-/**
- * Graceful close
- */
 async function closeMongo() {
   if (client) {
     await client.close();
@@ -127,7 +140,7 @@ async function closeMongo() {
 }
 
 module.exports = {
-  useMongoAuthState,
-  connectMongo,
-  closeMongo,
+  useMongoAuthState: useMongoAuthState,
+  connectMongo: connectMongo,
+  closeMongo: closeMongo,
 };
