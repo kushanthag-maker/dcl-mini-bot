@@ -28,6 +28,11 @@ try {
   setTimeout(() => process.exit(1), 3000);
 }
 
+// Optional: auto-start a default session if you want one always ready
+// Uncomment if needed:
+// const { startSession } = require('./lib/sessionManager');
+// startSession(config.sessionId || 'default').catch(err => console.error('[BOOT] default session error:', err.message));
+
 process.on('uncaughtException', (err) => {
   console.error('[UNCAUGHT]', err.message);
   console.error(err.stack);
