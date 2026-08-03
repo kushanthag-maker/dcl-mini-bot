@@ -281,6 +281,8 @@
 
         if (data.registered || data.status === 'online') {
           showMsg('✅ Successfully connected!', 'success');
+        } else if (data.error) {
+          showMsg('Bot error: ' + data.error, 'error');
         }
       } catch (e) {
         statusDot.className = 'dot offline';
