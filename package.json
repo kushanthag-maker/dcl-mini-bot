@@ -1,0 +1,38 @@
+{
+  "name": "dcl-mini-bot",
+  "version": "1.0.0",
+  "description": "DCL MINI - Professional WhatsApp Multi-Device Bot with MongoDB Session Storage",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "pm2": "pm2 start index.js --name dcl-mini",
+    "docker": "docker-compose up -d"
+  },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "bot",
+    "mongodb",
+    "multi-device"
+  ],
+  "author": "DCL MINI",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "axios": "^1.7.9",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "fs-extra": "^11.2.0",
+    "moment-timezone": "^0.5.46",
+    "mongodb": "^6.12.0",
+    "pino": "^9.6.0",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.33.5"
+  }
+}

@@ -1,0 +1,15 @@
+node_modules/
+.env
+.DS_Store
+*.log
+logs/
+sessions/
+.auth/
+coverage/
+dist/
+.idea/
+.vscode/
+*.tgz
+.npm
+tmp/
+temp/

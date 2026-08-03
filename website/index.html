@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DCL MINI - Pairing Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0f19;
+      --card: rgba(20, 25, 40, 0.75);
+      --border: rgba(99, 102, 241, 0.25);
+      --primary: #6366f1;
+      --primary-glow: rgba(99, 102, 241, 0.4);
+      --success: #22c55e;
+      --danger: #ef4444;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      background-image:
+        radial-gradient(ellipse at 20% 20%, rgba(99,102,241,0.15), transparent 50%),
+        radial-gradient(ellipse at 80% 80%, rgba(139,92,246,0.1), transparent 50%);
+    }
+    .container {
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 2rem 1.25rem;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #a5b4fc, #c4b5fd);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.02em;
+    }
+    header p { color: var(--muted); margin-top: 0.35rem; font-size: 0.9rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 1.25rem;
+      padding: 1.75rem;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+      margin-bottom: 1.25rem;
+    }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-bottom: 1.25rem;
+      font-size: 0.95rem;
+    }
+    .dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+    .dot.online { background: var(--success); box-shadow: 0 0 10px var(--success); }
+    .dot.offline { background: var(--danger); }
+    .dot.starting { background: #eab308; animation: pulse 1.2s infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+    input {
+      width: 100%;
+      padding: 0.85rem 1rem;
+      border-radius: 0.75rem;
+      border: 1px solid var(--border);
+      background: rgba(15, 20, 35, 0.8);
+      color: var(--text);
+      font-size: 1rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    input:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--primary-glow);
+    }
+    .btn {
+      width: 100%;
+      margin-top: 1rem;
+      padding: 0.9rem;
+      border: none;
+      border-radius: 0.75rem;
+      font-weight: 600;
+      font-size: 1rem;
+      cursor: pointer;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: white;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .btn:hover { transform: translateY(-1px); box-shadow: 0 6px 20px var(--primary-glow); }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      margin-top: 0.6rem;
+    }
+    .code-box {
+      display: none;
+      text-align: center;
+      margin-top: 1.25rem;
+      padding: 1.25rem;
+      background: rgba(99,102,241,0.1);
+      border-radius: 1rem;
+      border: 1px dashed var(--primary);
+    }
+    .code-box.show { display: block; animation: fadeIn 0.4s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .pairing-code {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: 0.25em;
+      color: #a5b4fc;
+      margin: 0.5rem 0;
+      font-variant-numeric: tabular-nums;
+    }
+    .qr-box {
+      display: none;
+      text-align: center;
+      margin-top: 1rem;
+    }
+    .qr-box.show { display: block; }
+    .qr-box img {
+      max-width: 220px;
+      border-radius: 0.75rem;
+      border: 4px solid rgba(255,255,255,0.08);
+    }
+    .msg {
+      margin-top: 1rem;
+      padding: 0.75rem;
+      border-radius: 0.6rem;
+      font-size: 0.9rem;
+      display: none;
+    }
+    .msg.error { display: block; background: rgba(239,68,68,0.15); color: #fca5a5; }
+    .msg.success { display: block; background: rgba(34,197,94,0.15); color: #86efac; }
+    .msg.info { display: block; background: rgba(99,102,241,0.15); color: #a5b4fc; }
+    footer {
+      text-align: center;
+      margin-top: 2rem;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .tab {
+      flex: 1;
+      padding: 0.6rem;
+      text-align: center;
+      border-radius: 0.6rem;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+    .tab.active {
+      background: rgba(99,102,241,0.2);
+      color: #c7d2fe;
+      border-color: var(--primary);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>DCL MINI</h1>
+      <p>Professional WhatsApp Multi-Device Bot</p>
+    </header>
+
+    <div class="card">
+      <div class="status">
+        <div class="dot" id="statusDot"></div>
+        <span id="statusText">Checking status...</span>
+      </div>
+
+      <div class="tabs">
+        <div class="tab active" data-tab="pair">Pairing Code</div>
+        <div class="tab" data-tab="qr">QR Code</div>
+      </div>
+
+      <div id="pairPanel">
+        <label for="phone">Phone Number (with country code, no +)</label>
+        <input type="tel" id="phone" placeholder="94771234567" autocomplete="tel" />
+        <button class="btn" id="btnPair" onclick="requestPair()">Generate Pairing Code</button>
+        <div class="code-box" id="codeBox">
+          <div style="color:var(--muted);font-size:0.85rem;">Enter this code in WhatsApp → Linked Devices</div>
+          <div class="pairing-code" id="pairingCode">----</div>
+          <button class="btn btn-secondary" onclick="copyCode()">Copy Code</button>
+        </div>
+      </div>
+
+      <div id="qrPanel" style="display:none;">
+        <div class="qr-box" id="qrBox">
+          <img id="qrImage" alt="QR Code" />
+          <p style="margin-top:0.75rem;color:var(--muted);font-size:0.85rem;">Scan with WhatsApp → Linked Devices</p>
+        </div>
+        <p id="qrWaiting" style="text-align:center;color:var(--muted);">Waiting for QR...</p>
+      </div>
+
+      <div class="msg" id="message"></div>
+    </div>
+
+    <footer>
+      MongoDB Session • Auto Reconnect • Secure<br>
+      DCL MINI © 2026
+    </footer>
+  </div>
+
+  <script>
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const messageEl = document.getElementById('message');
+    const codeBox = document.getElementById('codeBox');
+    const pairingCodeEl = document.getElementById('pairingCode');
+    const qrBox = document.getElementById('qrBox');
+    const qrImage = document.getElementById('qrImage');
+    const qrWaiting = document.getElementById('qrWaiting');
+
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const isPair = tab.dataset.tab === 'pair';
+        document.getElementById('pairPanel').style.display = isPair ? 'block' : 'none';
+        document.getElementById('qrPanel').style.display = isPair ? 'none' : 'block';
+      });
+    });
+
+    function showMsg(text, type = 'info') {
+      messageEl.textContent = text;
+      messageEl.className = 'msg ' + type;
+    }
+
+    async function refreshStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        statusDot.className = 'dot ' + (data.status || 'starting');
+        statusText.textContent = data.status === 'online' ? 'Bot Online' :
+                                 data.status === 'offline' ? 'Bot Offline' : 'Starting / Waiting for pair';
+
+        if (data.qr) {
+          qrImage.src = data.qr;
+          qrBox.classList.add('show');
+          qrWaiting.style.display = 'none';
+        } else {
+          qrBox.classList.remove('show');
+          qrWaiting.style.display = 'block';
+        }
+
+        if (data.pairingCode) {
+          pairingCodeEl.textContent = data.pairingCode.match(/.{1,4}/g)?.join('-') || data.pairingCode;
+          codeBox.classList.add('show');
+        }
+
+        if (data.registered || data.status === 'online') {
+          showMsg('✅ Successfully connected!', 'success');
+        }
+      } catch (e) {
+        statusDot.className = 'dot offline';
+        statusText.textContent = 'Server unreachable';
+      }
+    }
+
+    async function requestPair() {
+      const phone = document.getElementById('phone').value.trim().replace(/[^0-9]/g, '');
+      if (phone.length < 10) {
+        showMsg('Please enter a valid phone number with country code', 'error');
+        return;
+      }
+      const btn = document.getElementById('btnPair');
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+      try {
+        const res = await fetch('/api/pair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        pairingCodeEl.textContent = data.code.match(/.{1,4}/g)?.join('-') || data.code;
+        codeBox.classList.add('show');
+        showMsg('Pairing code generated! Enter it in WhatsApp.', 'success');
+      } catch (err) {
+        showMsg(err.message || 'Error generating code', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate Pairing Code';
+      }
+    }
+
+    function copyCode() {
+      const code = pairingCodeEl.textContent.replace(/-/g, '');
+      navigator.clipboard.writeText(code).then(() => {
+        showMsg('Code copied to clipboard!', 'success');
+      });
+    }
+
+    refreshStatus();
+    setInterval(refreshStatus, 4000);
+  </script>
+</body>
+</html>
