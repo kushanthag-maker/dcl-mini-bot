@@ -14,11 +14,9 @@ let connecting = null;
 async function connectMongo(uri) {
   if (db && client) {
     try {
-      // ping to verify connection is alive (works on driver 6)
       await client.db('admin').command({ ping: 1 });
       return db;
     } catch (e) {
-      // connection dead — reconnect
       try { await client.close(); } catch (e2) {}
       client = null;
       db = null;
@@ -130,6 +128,27 @@ async function useMongoAuthState(mongoUri, sessionId) {
   };
 }
 
+/**
+ * List sessionIds that have saved creds (for auto-restore after restart)
+ */
+async function listSavedSessions(mongoUri) {
+  var database = await connectMongo(mongoUri);
+  var collection = database.collection('sessions');
+  var docs = await collection.find({ key: 'creds' }).project({ sessionId: 1, data: 1 }).toArray();
+  var result = [];
+  for (var i = 0; i < docs.length; i++) {
+    var doc = docs[i];
+    if (!doc.sessionId || !doc.data) continue;
+    try {
+      var creds = JSON.parse(doc.data, BufferJSON.reviver);
+      if (creds && creds.registered) {
+        result.push(doc.sessionId);
+      }
+    } catch (e) {}
+  }
+  return result;
+}
+
 async function closeMongo() {
   if (client) {
     await client.close();
@@ -143,4 +162,5 @@ module.exports = {
   useMongoAuthState: useMongoAuthState,
   connectMongo: connectMongo,
   closeMongo: closeMongo,
+  listSavedSessions: listSavedSessions,
 };
