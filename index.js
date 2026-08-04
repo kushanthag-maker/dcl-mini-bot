@@ -28,10 +28,15 @@ try {
   setTimeout(() => process.exit(1), 3000);
 }
 
-// Optional: auto-start a default session if you want one always ready
-// Uncomment if needed:
-// const { startSession } = require('./lib/sessionManager');
-// startSession(config.sessionId || 'default').catch(err => console.error('[BOOT] default session error:', err.message));
+// Auto-restore paired sessions after Heroku restart
+const { restoreAllSessions } = require('./lib/sessionManager');
+restoreAllSessions()
+  .then(function (ids) {
+    console.log('[BOOT] Restored sessions:', ids.length ? ids.join(', ') : '(none)');
+  })
+  .catch(function (err) {
+    console.error('[BOOT] Session restore error:', err.message);
+  });
 
 process.on('uncaughtException', (err) => {
   console.error('[UNCAUGHT]', err.message);
