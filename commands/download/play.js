@@ -31,9 +31,8 @@ module.exports = {
 
     try {
       let videoId = null;
-      let videoUrl = null;
 
-      // ===== Extract / Search Video ID =====
+      // ===== Get Video ID =====
       if (isUrl) {
         const idMatch = query.match(/(?:youtu\.be\/|v=|\/embed\/|\/shorts\/|\/live\/)([a-zA-Z0-9_-]{11})/);
         if (!idMatch) {
@@ -44,7 +43,6 @@ module.exports = {
         }
         videoId = idMatch[1];
       } else {
-        // Search YouTube
         const searchRes = await axios.get(
           `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&sp=EgIQAQ%3D%3D`,
           {
@@ -60,14 +58,12 @@ module.exports = {
 
         if (searchRes.status !== 200) {
           return sock.sendMessage(from, {
-            text: '❌ YouTube search fail වුණා. Link එකක් දීලා try කරන්න.\nඋදා: `.play https://youtu.be/xxxxx`',
+            text: '❌ YouTube search fail වුණා. Link එකක් දීලා try කරන්න.',
             edit: loading.key,
           });
         }
 
         const html = searchRes.data;
-
-        // Multiple patterns to find video ID
         const patterns = [
           /"videoId":"([a-zA-Z0-9_-]{11})"/,
           /watch\?v=([a-zA-Z0-9_-]{11})/,
@@ -76,7 +72,7 @@ module.exports = {
 
         for (const pattern of patterns) {
           const match = html.match(pattern);
-          if (match && match[1]) {
+          if (match?.[1]) {
             videoId = match[1];
             break;
           }
@@ -84,35 +80,63 @@ module.exports = {
 
         if (!videoId) {
           return sock.sendMessage(from, {
-            text: '❌ Song එක හමු නොවීය.\n\n💡 YouTube link එකක් දීලා try කරන්න:\n`.play https://youtu.be/xxxxx`',
+            text: '❌ Song එක හමු නොවීය.\n💡 YouTube link එකක් දීලා try කරන්න.',
             edit: loading.key,
           });
         }
       }
 
-      videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
       const thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 
-      // ===== Download MP3 =====
+      // ===== Get MP3 direct link =====
       const apiUrl = `https://hashu-apis-production.up.railway.app/api/ytdl?apiKey=hashu_a70f3f6beed64bebddc7c36026f813f5&text=${encodeURIComponent(videoUrl)}&type=mp3`;
 
-      const { data, status } = await axios.get(apiUrl, {
+      const apiRes = await axios.get(apiUrl, {
         timeout: 60000,
-        validateStatus: () => true, // 404 නිසා throw නොවෙන්න
+        validateStatus: () => true,
       });
 
-      if (status !== 200 || !data?.success || !data?.results?.direct_link) {
+      if (apiRes.status !== 200 || !apiRes.data?.success || !apiRes.data?.results?.direct_link) {
         return sock.sendMessage(from, {
-          text: `❌ Song එක download කරන්න බැරි වුණා.\n\n📌 *Title search* fail වෙන්න පුළුවන්.\n💡 Direct YouTube link එකක් දීලා try කරන්න.`,
+          text: '❌ Song එක download කරන්න බැරි වුණා.\n💡 Direct YouTube link එකක් දීලා try කරන්න.',
           edit: loading.key,
         });
       }
 
-      const res = data.results;
+      const res = apiRes.data.results;
       const duration = Math.floor(parseFloat(res.duration) || 0);
       const mins = Math.floor(duration / 60);
       const secs = duration % 60;
       const durationStr = `\( {mins}: \){secs.toString().padStart(2, '0')}`;
+
+      // Update loading
+      await sock.sendMessage(from, {
+        text: '📥 *MP3 download වෙමින්...*',
+        edit: loading.key,
+      }).catch(() => {});
+
+      // ===== Download MP3 as BUFFER (important) =====
+      const audioRes = await axios.get(res.direct_link, {
+        responseType: 'arraybuffer',
+        timeout: 120000,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Referer: 'https://www.youtube.com/',
+        },
+        maxContentLength: 50 * 1024 * 1024, // 50MB limit
+        maxBodyLength: 50 * 1024 * 1024,
+      });
+
+      const audioBuffer = Buffer.from(audioRes.data);
+
+      if (!audioBuffer || audioBuffer.length < 1000) {
+        return sock.sendMessage(from, {
+          text: '❌ Audio file එක හිස් හෝ invalid.',
+          edit: loading.key,
+        });
+      }
 
       const caption = `
 ╭───「 🎵 *PLAY* 」───╮
@@ -120,16 +144,15 @@ module.exports = {
 │  📌 *Title*     ›  ${res.title}
 │  ⏱️ *Duration*  ›  ${durationStr}
 │  🎧 *Quality*   ›  ${res.quality || '128-320kbps'}
+│  📦 *Size*      ›  ${(audioBuffer.length / 1024 / 1024).toFixed(2)} MB
 │  🔗 *Source*    ›  YouTube
-│
-│  ✅ *Sending MP3...*
 │
 ╰──────────────────────╯`.trim();
 
       // Delete loading
       await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
-      // 1. Thumbnail + Info
+      // 1. Send thumbnail + info
       await sock.sendMessage(
         from,
         {
@@ -139,20 +162,22 @@ module.exports = {
         { quoted: msg }
       );
 
-      // 2. Audio
+      // 2. Send audio as BUFFER (this is the reliable way)
       await sock.sendMessage(
         from,
         {
-          audio: { url: res.direct_link },
+          audio: audioBuffer,
           mimetype: 'audio/mpeg',
-          fileName: `${(res.title || 'song').substring(0, 50)}.mp3`,
+          fileName: `${(res.title || 'song').substring(0, 40)}.mp3`,
+          ptt: false,
         },
         { quoted: msg }
       );
+
     } catch (err) {
       console.error('Play Error:', err.message);
       await sock.sendMessage(from, {
-        text: `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\`\n\n💡 YouTube link එකක් දීලා try කරන්න.`,
+        text: `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\``,
         edit: loading.key,
       }).catch(() => {});
     }
