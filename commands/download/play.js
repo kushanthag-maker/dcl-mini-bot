@@ -1,8 +1,8 @@
 const axios = require('axios');
 
-// chat (from) -> { videoId, title, thumbnail, videoUrl, timeout, createdAt }
+// chat (from) -> { videoId, title, thumbnail, timeout, createdAt }
 const pendingSearch = new Map();
-const PENDING_TTL_MS = 2 * 60 * 1000; // 2 minutes to reply
+const PENDING_TTL_MS = 2 * 60 * 1000; // 2 minutes to pick a format
 
 async function fetchAndSend({ sock, msg, from, videoId, title, thumbnail, format }) {
   const loading = await sock.sendMessage(from, {
@@ -88,7 +88,7 @@ async function fetchAndSend({ sock, msg, from, videoId, title, thumbnail, format
         { quoted: msg }
       );
     } else {
-      // caption not supported on audio type, send info separately first
+      // "audio" message type doesn't support captions, so send info first
       await sock.sendMessage(from, { image: { url: thumbnail }, caption }, { quoted: msg });
       await sock.sendMessage(
         from,
@@ -113,10 +113,37 @@ async function fetchAndSend({ sock, msg, from, videoId, title, thumbnail, format
 module.exports = {
   name: 'play',
   aliases: ['song', 'p'],
-  description: 'Search song, then reply 1=MP3 / 2=Document',
+  description: 'Search song, then .play 1 (MP3) or .play 2 (Document)',
   category: 'download',
 
   async execute({ sock, msg, from, args }) {
+    // ===== Format selection: .play 1 / .play 2 =====
+    if (args.length === 1 && (args[0] === '1' || args[0] === '2')) {
+      const pending = pendingSearch.get(from);
+
+      if (!pending) {
+        return sock.sendMessage(from, {
+          text: '❌ Active search එකක් නැහැ.\n💡 කලින් `.play <song name>` කරලා song එකක් search කරන්න.'
+        }, { quoted: msg });
+      }
+
+      clearTimeout(pending.timeout);
+      pendingSearch.delete(from);
+
+      const format = args[0] === '2' ? 'document' : 'audio';
+
+      return fetchAndSend({
+        sock,
+        msg,
+        from,
+        videoId: pending.videoId,
+        title: pending.title,
+        thumbnail: pending.thumbnail,
+        format,
+      });
+    }
+
+    // ===== Normal search =====
     if (!args.length) {
       return sock.sendMessage(from, {
         text: `╭───「 🎵 *PLAY* 」───╮
@@ -124,6 +151,10 @@ module.exports = {
 │  ❌ *Usage:*
 │  .play <song name>
 │  .play <youtube url>
+│
+│  📌 *After search:*
+│  .play 1   › 🎧 MP3 (Audio)
+│  .play 2   › 📁 Document
 │
 │  📌 *Example:*
 │  .play maa dihaa dilu
@@ -220,12 +251,12 @@ module.exports = {
 │
 │  📌 *Title*  ›  ${title}
 │
-│  👇 *Reply* එකෙන් format එක choose කරන්න:
+│  👇 *Reply* කරන්න format එක choose කරන්න:
 │
-│  *1* › 🎧 MP3 (Audio)
-│  *2* › 📁 Document
+│  *.play 1* › 🎧 MP3 (Audio)
+│  *.play 2* › 📁 Document
 │
-│  ⏳ විනාඩි 2ක් ඇතුළත reply කරන්න
+│  ⏳ විනාඩි 2ක් ඇතුළත command එක දෙන්න
 │
 ╰──────────────────────╯`,
         },
@@ -238,33 +269,5 @@ module.exports = {
         edit: loading.key,
       }).catch(() => {});
     }
-  },
-
-  // Call this from your main message handler for every incoming message
-  // (non-command text) BEFORE/alongside your other pendingSearch checks.
-  // Returns true if it handled the message, false otherwise.
-  async handleReply({ sock, msg, from, text }) {
-    const pending = pendingSearch.get(from);
-    if (!pending) return false;
-
-    const choice = (text || '').trim();
-    if (choice !== '1' && choice !== '2') return false;
-
-    clearTimeout(pending.timeout);
-    pendingSearch.delete(from);
-
-    const format = choice === '2' ? 'document' : 'audio';
-
-    await fetchAndSend({
-      sock,
-      msg,
-      from,
-      videoId: pending.videoId,
-      title: pending.title,
-      thumbnail: pending.thumbnail,
-      format,
-    });
-
-    return true;
   },
 };
