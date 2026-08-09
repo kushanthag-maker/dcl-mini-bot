@@ -3,6 +3,60 @@ const axios = require('axios');
 // chat (from) -> { videoId, title, thumbnail, timeout, createdAt }
 const pendingSearch = new Map();
 const PENDING_TTL_MS = 2 * 60 * 1000; // 2 minutes to pick a format
+const MAX_DOWNLOAD_ATTEMPTS = 2;
+
+// Remove characters that break WhatsApp document filenames (emoji, / \ : * ? " < > |)
+function sanitizeFileName(name) {
+  return (name || 'song')
+    .replace(/[\/\\:*?"<>|]/g, '')
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, '')
+    .trim()
+    .substring(0, 40) || 'song';
+}
+
+// Real MP3 files start with an ID3 tag ("ID3") or an MPEG frame sync (0xFF Ex/Fx).
+// If the "direct_link" actually points to an HTML error/redirect page, the
+// downloaded bytes will NOT match this — that's the broken-file case.
+function isValidMp3Buffer(buffer) {
+  if (!buffer || buffer.length < 1000) return false;
+  const b0 = buffer[0];
+  const b1 = buffer[1];
+  const isId3 = b0 === 0x49 && b1 === 0x44 && buffer[2] === 0x33; // "ID3"
+  const isFrameSync = b0 === 0xff && (b1 & 0xe0) === 0xe0;
+  return isId3 || isFrameSync;
+}
+
+async function getFreshDirectLink(videoUrl) {
+  const apiUrl = `https://hashu-apis-production.up.railway.app/api/ytdl?apiKey=hashu_a70f3f6beed64bebddc7c36026f813f5&text=${encodeURIComponent(videoUrl)}&type=mp3`;
+  const apiRes = await axios.get(apiUrl, { timeout: 60000, validateStatus: () => true });
+
+  if (apiRes.status !== 200 || !apiRes.data?.success || !apiRes.data?.results?.direct_link) {
+    return null;
+  }
+  return apiRes.data.results;
+}
+
+async function downloadAudioBuffer(directLink) {
+  const audioRes = await axios.get(directLink, {
+    responseType: 'arraybuffer',
+    timeout: 120000,
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      Referer: 'https://www.youtube.com/',
+    },
+    maxContentLength: 50 * 1024 * 1024,
+    maxBodyLength: 50 * 1024 * 1024,
+    validateStatus: () => true,
+  });
+
+  const contentType = (audioRes.headers?.['content-type'] || '').toLowerCase();
+  if (contentType.includes('text/html') || contentType.includes('application/json')) {
+    return null; // link expired / returned an error page instead of audio
+  }
+
+  return Buffer.from(audioRes.data);
+}
 
 async function fetchAndSend({ sock, msg, from, videoId, title, thumbnail, format }) {
   const loading = await sock.sendMessage(from, {
@@ -12,22 +66,42 @@ async function fetchAndSend({ sock, msg, from, videoId, title, thumbnail, format
   try {
     const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-    // ===== Get MP3 direct link =====
-    const apiUrl = `https://hashu-apis-production.up.railway.app/api/ytdl?apiKey=hashu_a70f3f6beed64bebddc7c36026f813f5&text=${encodeURIComponent(videoUrl)}&type=mp3`;
+    let res = null;
+    let audioBuffer = null;
 
-    const apiRes = await axios.get(apiUrl, {
-      timeout: 60000,
-      validateStatus: () => true,
-    });
+    // Retry loop: if the buffer isn't a real MP3, fetch a fresh direct_link and try again
+    for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
+      res = await getFreshDirectLink(videoUrl);
+      if (!res) continue;
 
-    if (apiRes.status !== 200 || !apiRes.data?.success || !apiRes.data?.results?.direct_link) {
+      const buf = await downloadAudioBuffer(res.direct_link);
+      if (buf && isValidMp3Buffer(buf)) {
+        audioBuffer = buf;
+        break;
+      }
+
+      if (attempt < MAX_DOWNLOAD_ATTEMPTS) {
+        await sock.sendMessage(from, {
+          text: '⚠️ Link එක fail වුණා, ආයෙත් try කරමින්...',
+          edit: loading.key,
+        }).catch(() => {});
+      }
+    }
+
+    if (!res) {
       return sock.sendMessage(from, {
         text: '❌ Song එක download කරන්න බැරි වුණා.\n💡 Direct YouTube link එකක් දීලා try කරන්න.',
         edit: loading.key,
       });
     }
 
-    const res = apiRes.data.results;
+    if (!audioBuffer) {
+      return sock.sendMessage(from, {
+        text: '❌ Audio file එක corrupt/invalid (link expired වෙන්න ඇති).\n💡 ආයෙත් `.play <song name>` කරලා try කරන්න.',
+        edit: loading.key,
+      });
+    }
+
     const finalTitle = res.title || title;
     const duration = Math.floor(parseFloat(res.duration) || 0);
     const mins = Math.floor(duration / 60);
@@ -35,28 +109,6 @@ async function fetchAndSend({ sock, msg, from, videoId, title, thumbnail, format
     const durationStr = duration > 0
       ? `${mins}:${secs.toString().padStart(2, '0')}`
       : 'N/A';
-
-    // ===== Download MP3 as BUFFER (required for reliable WA delivery) =====
-    const audioRes = await axios.get(res.direct_link, {
-      responseType: 'arraybuffer',
-      timeout: 120000,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Referer: 'https://www.youtube.com/',
-      },
-      maxContentLength: 50 * 1024 * 1024,
-      maxBodyLength: 50 * 1024 * 1024,
-    });
-
-    const audioBuffer = Buffer.from(audioRes.data);
-
-    if (!audioBuffer || audioBuffer.length < 1000) {
-      return sock.sendMessage(from, {
-        text: '❌ Audio file එක හිස් හෝ invalid.',
-        edit: loading.key,
-      });
-    }
 
     const fileSizeMB = (audioBuffer.length / 1024 / 1024).toFixed(2);
 
@@ -74,7 +126,7 @@ async function fetchAndSend({ sock, msg, from, videoId, title, thumbnail, format
 
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
-    const fileName = `${finalTitle.substring(0, 40)}.mp3`;
+    const fileName = `${sanitizeFileName(finalTitle)}.mp3`;
 
     if (format === 'document') {
       await sock.sendMessage(
