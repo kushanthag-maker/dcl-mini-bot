@@ -128,35 +128,83 @@ async function fetchAndSend({ sock, msg, from, videoId, title, thumbnail, format
 
     const fileName = `${sanitizeFileName(finalTitle)}.mp3`;
 
+    // WhatsApp silently drops media over ~64MB, and Baileys can throw/hang on
+    // shaky connections without the outer catch ever seeing it if the promise
+    // never settles cleanly. So: explicit size guard + its own try/catch with
+    // a document fallback if the audio-type send fails.
+    const MAX_WA_BYTES = 60 * 1024 * 1024;
+    if (audioBuffer.length > MAX_WA_BYTES) {
+      return sock.sendMessage(from, {
+        text: `❌ File එක ගොඩක් loku (${fileSizeMB} MB). WhatsApp වලට යවන්න බැහැ.\n💡 කෙටි song එකක් try කරන්න.`,
+        edit: loading.key,
+      });
+    }
+
+    let sendError = null;
+
     if (format === 'document') {
-      await sock.sendMessage(
-        from,
-        {
-          document: audioBuffer,
-          mimetype: 'audio/mpeg',
-          fileName,
-          caption,
-        },
-        { quoted: msg }
-      );
+      try {
+        await sock.sendMessage(
+          from,
+          {
+            document: audioBuffer,
+            mimetype: 'audio/mpeg',
+            fileName,
+            caption,
+          },
+          { quoted: msg }
+        );
+      } catch (e) {
+        sendError = e;
+      }
     } else {
       // "audio" message type doesn't support captions, so send info first
-      await sock.sendMessage(from, { image: { url: thumbnail }, caption }, { quoted: msg });
-      await sock.sendMessage(
-        from,
-        {
-          audio: audioBuffer,
-          mimetype: 'audio/mpeg',
-          fileName,
-          ptt: false,
-        },
-        { quoted: msg }
-      );
+      try {
+        await sock.sendMessage(from, { image: { url: thumbnail }, caption }, { quoted: msg });
+      } catch (e) {
+        // Non-fatal: thumbnail/caption failing shouldn't block the actual song
+        console.error('Play thumbnail send error:', e.message);
+      }
+
+      try {
+        await sock.sendMessage(
+          from,
+          {
+            audio: audioBuffer,
+            mimetype: 'audio/mpeg',
+            fileName,
+            ptt: false,
+          },
+          { quoted: msg }
+        );
+      } catch (e) {
+        // Audio-type message failed (common on some clients/connections) —
+        // fall back to sending it as a document instead of just dropping it.
+        console.error('Play audio send error, retrying as document:', e.message);
+        try {
+          await sock.sendMessage(
+            from,
+            {
+              document: audioBuffer,
+              mimetype: 'audio/mpeg',
+              fileName,
+              caption: '📁 *Audio format fail වුණා, document විදිහට යවනවා*',
+            },
+            { quoted: msg }
+          );
+        } catch (e2) {
+          sendError = e2;
+        }
+      }
+    }
+
+    if (sendError) {
+      throw sendError;
     }
   } catch (err) {
     console.error('Play Download Error:', err.message);
     await sock.sendMessage(from, {
-      text: `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\``,
+      text: `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\`\n\n💡 ආයෙත් \`.play <song name>\` කරලා try කරන්න.`,
       edit: loading.key,
     }).catch(() => {});
   }
