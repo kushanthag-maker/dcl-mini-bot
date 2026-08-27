@@ -275,14 +275,11 @@
         }
 
         list.innerHTML = data.sessions.map(function (s) {
-          var userLabel = s.user && s.user.id
-            ? s.user.id.split(':')[0].split('@')[0]
-            : '—';
           return (
             '<div class="session-item">' +
               '<div class="info">' +
                 '<div class="id">' + s.sessionId + '</div>' +
-                '<div class="meta">' + statusBadge(s.status) + '<span>' + userLabel + '</span></div>' +
+                '<div class="meta">' + statusBadge(s.status) + '</div>' +
               '</div>' +
             '</div>'
           );
