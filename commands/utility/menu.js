@@ -1,106 +1,132 @@
 const config = require('../../config');
 const moment = require('moment-timezone');
+const { getAllCommands } = require('../../lib/commandHandler');
+
+const MENU_LOGO = 'https://files.catbox.moe/4dvou4.png';
+
+const CATEGORY_META = {
+  owner:    { title: '𝗢𝗪𝗡𝗘𝗥',    emoji: '👑', order: 1 },
+  group:    { title: '𝗚𝗥𝗢𝗨𝗣',    emoji: '👥', order: 2 },
+  download: { title: '𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗', emoji: '📥', order: 3 },
+  ai:       { title: '𝗔𝗜',       emoji: '🤖', order: 4 },
+  utility:  { title: '𝗨𝗧𝗜𝗟𝗜𝗧𝗬',  emoji: '🛠️', order: 5 },
+  fun:      { title: '𝗙𝗨𝗡',      emoji: '🎮', order: 6 },
+};
+
+function formatUptime(sec) {
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  if (m) parts.push(`${m}m`);
+  parts.push(`${s}s`);
+  return parts.join(' ');
+}
+
+function buildCategoryBlocks(prefix) {
+  const all = getAllCommands();
+  const byCat = {};
+
+  for (const cmd of all) {
+    const cat = cmd.category || 'utility';
+    if (!byCat[cat]) byCat[cat] = [];
+    byCat[cat].push(cmd);
+  }
+
+  const ordered = Object.keys(byCat).sort((a, b) => {
+    const oa = (CATEGORY_META[a] && CATEGORY_META[a].order) || 99;
+    const ob = (CATEGORY_META[b] && CATEGORY_META[b].order) || 99;
+    return oa - ob;
+  });
+
+  let out = '';
+  for (const cat of ordered) {
+    const meta = CATEGORY_META[cat] || { title: cat.toUpperCase(), emoji: '📌' };
+    const cmds = byCat[cat].sort((a, b) => a.name.localeCompare(b.name));
+
+    out += `\n╭───「 ${meta.emoji} *${meta.title}* 」───╮\n│\n`;
+
+    for (const cmd of cmds) {
+      const aliases = Array.isArray(cmd.aliases) && cmd.aliases.length
+        ? `  _${cmd.aliases.slice(0, 3).join(', ')}_`
+        : '';
+      const pad = cmd.name.length < 10 ? ' '.repeat(10 - cmd.name.length) : ' ';
+      out += `│  ▸ *${prefix}${cmd.name}*${pad}${aliases}\n`;
+    }
+
+    out += `│\n╰──────────────────────╯\n`;
+  }
+  return out;
+}
 
 module.exports = {
   name: 'menu',
-  aliases: ['help', 'list', 'm'],
+  aliases: ['help', 'list', 'm', 'commands'],
   description: 'Show all available commands with banner',
   category: 'utility',
   async execute({ sock, msg, from }) {
     try {
-      const uptime = process.uptime();
-      const d = Math.floor(uptime / 86400);
-      const h = Math.floor((uptime % 86400) / 3600);
-      const m = Math.floor((uptime % 3600) / 60);
-      const s = Math.floor(uptime % 60);
-      const runtime = `${d}d ${h}h ${m}m ${s}s`;
-      const now = moment().tz(config.timezone || 'Asia/Colombo').format('HH:mm');
+      const prefix = config.prefix || '.';
+      const botName = config.botName || 'ZAYRAX MINI';
+      const runtime = formatUptime(process.uptime());
+      const now = moment().tz(config.timezone || 'Asia/Colombo').format('YYYY-MM-DD  HH:mm');
+      const userJid = msg.key.participant || msg.key.remoteJid || '';
+      const user = String(userJid).split('@')[0].split(':')[0];
+      const totalCmds = getAllCommands().length;
 
-      const user = (msg.key.participant || msg.key.remoteJid || '').split('@')[0];
+      const header = `
+╭═══════════════╮
+│  ⚡ *${botName}*
+╰═══════════════╯
 
-      const menuText = `
-╭───「 ⚡ *${config.botName}* 」───╮
+╭───「 📋 *𝗦𝗧𝗔𝗧𝗨𝗦* 」───╮
 │
-│  👤 *User*      ›  @${user}
-│  🤖 *Bot*       ›  ${config.botName}
-│  ⚙️ *Prefix*    ›  *${config.prefix}*
-│  ⏱ *Runtime*   ›  _${runtime}_
-│  🕐 *Time*      ›  _${now}_
-│  📶 *Status*    ›  Online ✅
-│
-╰──────────────────────╯
-
-╭───「 👑 *𝗢𝗪𝗡𝗘𝗥* 」───╮
-│
-│  ▸ *${config.prefix}owner*     _creator_
-│  ▸ *${config.prefix}restart*   _reboot_
-│  ▸ *${config.prefix}shutdown*  _stop_
-│
-╰──────────────────────╯
-
-╭───「 👥 *𝗚𝗥𝗢𝗨𝗣* 」───╮
-│
-│  ▸ *${config.prefix}kick*      _remove_
-│  ▸ *${config.prefix}promote*
-│  ▸ *${config.prefix}demote*
-│  ▸ *${config.prefix}tagall*    _everyone, all_
-│
-╰──────────────────────╯
-
-╭───「 📥 *𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗* 」───╮
-│
-│  ▸ *${config.prefix}play*      _song, p_
-│
-╰──────────────────────╯
-
-╭───「 🤖 *𝗔𝗜* 」───╮
-│
-│  ▸ *${config.prefix}ai*        _chat, gpt_
-│
-╰──────────────────────╯
-
-╭───「 🛠️ *𝗨𝗧𝗜𝗟𝗜𝗧𝗬* 」───╮
-│
-│  ▸ *${config.prefix}menu*      _help, list, m_
-│  ▸ *${config.prefix}ping*      _p_
-│  ▸ *${config.prefix}runtime*   _uptime_
-│  ▸ *${config.prefix}alive*     _bot_
-│  ▸ *${config.prefix}news*      _adaderana, n_
-│  ▸ *${config.prefix}calc*      _calculate, math_
-│
-╰──────────────────────╯
-
-╭───「 🎮 *𝗙𝗨𝗡* 」───╮
-│
-│  ▸ *${config.prefix}dice*      _roll_
-│  ▸ *${config.prefix}flip*      _coin_
-│  ▸ *${config.prefix}joke*      _jokes_
-│
-╰──────────────────────╯
-
-╭───「 ℹ️ *𝗜𝗡𝗙𝗢* 」───╮
-│
-│  💡 Type *${config.prefix}help* <cmd>
-│  🔥 *DCL MINI* › _v1.0_
-│  🖤 _Dark Cyber Lidarz_
+│  👤 *User*     ›  @${user}
+│  🤖 *Bot*      ›  ${botName}
+│  ⚙️ *Prefix*   ›  *${prefix}*
+│  📦 *Commands* ›  *${totalCmds}*
+│  ⏱ *Runtime*  ›  _${runtime}_
+│  🕐 *Time*     ›  _${now}_
+│  📶 *Status*   ›  Online ✅
 │
 ╰──────────────────────╯
 `.trim();
 
+      const body = buildCategoryBlocks(prefix);
+
+      const footer = `
+╭───「 ℹ️ *𝗜𝗡𝗙𝗢* 」───╮
+│
+│  💡 Type *${prefix}menu* anytime
+│  🔥 *ZAYRAX MINI* › _v1.0_
+│  💜 Fast · Stable · Secure
+│
+╰──────────────────────╯
+`.trim();
+
+      const menuText = `${header}\n${body}\n${footer}`;
+
       await sock.sendMessage(
         from,
         {
-          image: { url: 'https://files.catbox.moe/xvos88.png' },
+          image: { url: MENU_LOGO },
           caption: menuText,
-          mentions: [msg.key.participant || msg.key.remoteJid],
+          mentions: [userJid],
         },
         { quoted: msg }
       );
     } catch (err) {
       console.error('Menu Error:', err.message);
-      await sock.sendMessage(from, {
-        text: '❌ Menu load වෙන්නේ නැහැ.',
-      }, { quoted: msg });
+      try {
+        await sock.sendMessage(
+          from,
+          { text: '❌ Menu load වෙන්නේ නැහැ. ටිකකින් නැවත try කරන්න.' },
+          { quoted: msg }
+        );
+      } catch (_) {}
     }
   },
 };
