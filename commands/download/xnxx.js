@@ -5,7 +5,8 @@ const API_KEY = 'zan_FLUs8y9T_fcz7cgi12p';
 const SEARCH_API = 'https://api.zanta-mini.store/api/xnxx/search';
 const DOWNLOAD_API = 'https://api.zanta-mini.store/api/xnxx/dl';
 const MAX_WA_BYTES = 60 * 1024 * 1024;
-const PENDING_TTL_MS = 3 * 60 * 1000;
+const PENDING_TTL_MS = 5 * 60 * 1000;
+const MAX_ALL_DOWNLOADS = 8;
 
 // chat (from) -> { results, timeout }
 const pendingSearch = new Map();
@@ -33,7 +34,6 @@ function pickDownloadUrl(result) {
   const links = result?.dl_links || result?.links || result?.download || {};
   if (typeof links === 'string' && /^https?:\/\//i.test(links)) return links;
 
-  // Prefer high > medium > low
   const order = ['high', 'hd', 'medium', 'low', 'sd'];
   for (const key of order) {
     if (typeof links[key] === 'string' && /^https?:\/\//i.test(links[key])) {
@@ -41,7 +41,6 @@ function pickDownloadUrl(result) {
     }
   }
 
-  // Array form
   if (Array.isArray(links) && links.length) {
     const last = links[links.length - 1];
     if (typeof last === 'string') return last;
@@ -54,12 +53,14 @@ function pickDownloadUrl(result) {
   return null;
 }
 
-async function downloadAndSend({ sock, msg, from, pageUrl, titleHint }) {
-  const loading = await sock.sendMessage(
-    from,
-    { text: '📥 *Video download වෙමින්...*' },
-    { quoted: msg }
-  );
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function downloadAndSend({ sock, msg, from, pageUrl, titleHint, quiet }) {
+  const loading = quiet
+    ? null
+    : await sock.sendMessage(from, { text: '📥 *Video download වෙමින්...*' }, { quoted: msg });
 
   try {
     const apiUrl = `${DOWNLOAD_API}?apiKey=${API_KEY}&url=${encodeURIComponent(pageUrl)}`;
@@ -75,20 +76,17 @@ async function downloadAndSend({ sock, msg, from, pageUrl, titleHint }) {
     const data = apiRes.data;
     if (apiRes.status !== 200 || !data || data.success === false || data.status === false) {
       const reason = data?.message || data?.msg || data?.error || 'Download fail';
-      return sock.sendMessage(from, {
-        text: `❌ Download fail වුණා.\n\n\`${reason}\``,
-        edit: loading.key,
-      });
+      const text = `❌ Download fail වුණා.\n\n\`${reason}\``;
+      if (loading) return sock.sendMessage(from, { text, edit: loading.key });
+      return sock.sendMessage(from, { text }, { quoted: msg });
     }
 
     const result = data.result || data.data || data;
     const mp4Url = pickDownloadUrl(result);
     if (!mp4Url) {
-      console.error('XNXX download no link:', JSON.stringify(result).slice(0, 500));
-      return sock.sendMessage(from, {
-        text: '❌ Video link එක හොයාගන්න බැරි වුණා.',
-        edit: loading.key,
-      });
+      const text = '❌ Video link එක හොයාගන්න බැරි වුණා.';
+      if (loading) return sock.sendMessage(from, { text, edit: loading.key });
+      return sock.sendMessage(from, { text }, { quoted: msg });
     }
 
     const title = result.title || titleHint || 'XNXX Video';
@@ -97,10 +95,11 @@ async function downloadAndSend({ sock, msg, from, pageUrl, titleHint }) {
       (result.dl_links && result.dl_links.low && mp4Url === result.dl_links.low && 'Low') ||
       'Auto';
 
-    await sock.sendMessage(from, {
-      text: '⬇️ *File ලබාගනිමින්...*',
-      edit: loading.key,
-    }).catch(() => {});
+    if (loading) {
+      await sock
+        .sendMessage(from, { text: '⬇️ *File ලබාගනිමින්...*', edit: loading.key })
+        .catch(() => {});
+    }
 
     const mediaRes = await axios.get(mp4Url, {
       responseType: 'arraybuffer',
@@ -121,26 +120,23 @@ async function downloadAndSend({ sock, msg, from, pageUrl, titleHint }) {
       contentType.includes('text/html') ||
       contentType.includes('application/json')
     ) {
-      return sock.sendMessage(from, {
-        text: '❌ Video file එක ලබාගන්න බැරි වුණා (link expired / blocked).',
-        edit: loading.key,
-      });
+      const text = '❌ Video file එක ලබාගන්න බැරි වුණා (link expired / blocked).';
+      if (loading) return sock.sendMessage(from, { text, edit: loading.key });
+      return sock.sendMessage(from, { text }, { quoted: msg });
     }
 
     const buffer = Buffer.from(mediaRes.data);
     if (!buffer.length || buffer.length < 10000) {
-      return sock.sendMessage(from, {
-        text: '❌ Video file එක empty / invalid.',
-        edit: loading.key,
-      });
+      const text = '❌ Video file එක empty / invalid.';
+      if (loading) return sock.sendMessage(from, { text, edit: loading.key });
+      return sock.sendMessage(from, { text }, { quoted: msg });
     }
 
     const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
     if (buffer.length > MAX_WA_BYTES) {
-      return sock.sendMessage(from, {
-        text: `❌ File එක ගොඩක් ලොකුයි (*${sizeMB} MB*).\nWhatsApp limit ~60MB.\n💡 කෙටි video එකක් try කරන්න.`,
-        edit: loading.key,
-      });
+      const text = `❌ File එක ගොඩක් ලොකුයි (*${sizeMB} MB*). WhatsApp limit ~60MB.`;
+      if (loading) return sock.sendMessage(from, { text, edit: loading.key });
+      return sock.sendMessage(from, { text }, { quoted: msg });
     }
 
     const caption = `
@@ -153,23 +149,20 @@ async function downloadAndSend({ sock, msg, from, pageUrl, titleHint }) {
 │
 ╰──────────────────────╯`.trim();
 
-    await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
+    if (loading) {
+      await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
+    }
 
     const fileName = `${sanitizeName(title)}.mp4`;
 
     try {
       await sock.sendMessage(
         from,
-        {
-          video: buffer,
-          mimetype: 'video/mp4',
-          caption,
-          fileName,
-        },
+        { video: buffer, mimetype: 'video/mp4', caption, fileName },
         { quoted: msg }
       );
     } catch (sendErr) {
-      console.error('XNXX video send failed, document fallback:', sendErr.message);
+      console.error('XNXX send failed, document fallback:', sendErr.message);
       await sock.sendMessage(
         from,
         {
@@ -181,23 +174,145 @@ async function downloadAndSend({ sock, msg, from, pageUrl, titleHint }) {
         { quoted: msg }
       );
     }
+    return true;
   } catch (err) {
     console.error('XNXX Download Error:', err.message);
-    await sock.sendMessage(from, {
-      text: `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\``,
-      edit: loading.key,
-    }).catch(() => {});
+    const text = `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\``;
+    if (loading) {
+      await sock.sendMessage(from, { text, edit: loading.key }).catch(() => {});
+    } else {
+      await sock.sendMessage(from, { text }, { quoted: msg }).catch(() => {});
+    }
+    return false;
   }
 }
 
 module.exports = {
   name: 'xnxx',
-  aliases: ['xnx', 'xnxxdl'],
-  description: 'Search & download XNXX videos (18+)',
+  // .xnxxdl / .xnxdl / .xndl එකම file එකෙන් work වෙනවා
+  aliases: ['xnx', 'xnxxdl', 'xnxdl', 'xndl'],
+  description: 'Search / download XNXX videos (18+)',
   category: 'download',
 
-  async execute({ sock, msg, from, args }) {
+  async execute({ sock, msg, from, args, body }) {
     const prefix = config.prefix || '.';
+    // Detect which alias was typed (.xnxx vs .xnxxdl)
+    let cmdName = 'xnxx';
+    if (body && typeof body === 'string') {
+      const rawCmd = body.slice(prefix.length).trim().split(/\s+/)[0] || '';
+      cmdName = rawCmd.toLowerCase();
+    }
+
+    // ===== Direct-download aliases: .xnxxdl <url> =====
+    const isDlOnly = ['xnxxdl', 'xnxdl', 'xndl'].includes(cmdName);
+
+    if (isDlOnly) {
+      if (!args.length) {
+        return sock.sendMessage(
+          from,
+          {
+            text: `╭───「 🔥 *XNXX DL (18+)* 」───╮
+│
+│  ❌ *Usage:*
+│  ${prefix}xnxxdl <xnxx video url>
+│
+│  📌 *Example:*
+│  ${prefix}xnxxdl https://www.xnxx.tv/video-xxxxx/...
+│
+│  💡 Search: ${prefix}xnxx <query>
+│
+│  ⚠️ *18+ only*
+│
+╰──────────────────────╯`,
+          },
+          { quoted: msg }
+        );
+      }
+
+      const raw = args.join(' ').trim();
+      const pageUrl = extractUrl(raw) || (isXnxxUrl(raw) ? raw : null);
+
+      if (!pageUrl) {
+        return sock.sendMessage(
+          from,
+          {
+            text: `❌ Valid XNXX link එකක් නොවේ.\n\n💡 *Example:*\n${prefix}xnxxdl https://www.xnxx.tv/video-xxxxx/...`,
+          },
+          { quoted: msg }
+        );
+      }
+
+      return downloadAndSend({
+        sock,
+        msg,
+        from,
+        pageUrl,
+        titleHint: 'XNXX Video',
+      });
+    }
+
+    // ===== .xnxx all → download every result from last search =====
+    if (args.length === 1 && args[0].toLowerCase() === 'all') {
+      const pending = pendingSearch.get(from);
+
+      if (!pending || !pending.results?.length) {
+        return sock.sendMessage(
+          from,
+          {
+            text: `❌ Active search එකක් නැහැ.\n💡 කලින් \`${prefix}xnxx <query>\` කරලා search කරන්න.\nඊට පස්සේ \`${prefix}xnxx all\``,
+          },
+          { quoted: msg }
+        );
+      }
+
+      const list = pending.results.slice(0, MAX_ALL_DOWNLOADS);
+      clearTimeout(pending.timeout);
+      pendingSearch.delete(from);
+
+      await sock.sendMessage(
+        from,
+        {
+          text: `📦 *${list.length}* videos download කරමින්...\n⏳ ටිකක් ඉන්න (එකින් එක).`,
+        },
+        { quoted: msg }
+      );
+
+      let ok = 0;
+      let fail = 0;
+      for (let i = 0; i < list.length; i++) {
+        const item = list[i];
+        await sock
+          .sendMessage(from, {
+            text: `⬇️ *[${i + 1}/${list.length}]* ${String(item.title).slice(0, 50)}`,
+          })
+          .catch(() => {});
+
+        const success = await downloadAndSend({
+          sock,
+          msg,
+          from,
+          pageUrl: item.url,
+          titleHint: item.title,
+          quiet: true,
+        });
+        if (success) ok++;
+        else fail++;
+
+        if (i < list.length - 1) await sleep(1500);
+      }
+
+      return sock.sendMessage(
+        from,
+        {
+          text: `✅ *Done*\n📦 Sent: *${ok}*\n❌ Failed: *${fail}*${
+            pending.results.length > MAX_ALL_DOWNLOADS
+              ? `\n⚠️ Max ${MAX_ALL_DOWNLOADS} videos per .xnxx all`
+              : ''
+          }`,
+        },
+        { quoted: msg }
+      );
+    }
 
     // ===== Select: .xnxx 1 =====
     if (args.length === 1 && /^\d+$/.test(args[0])) {
@@ -218,7 +333,7 @@ module.exports = {
         return sock.sendMessage(
           from,
           {
-            text: `❌ Number එක වැරදියි. *1* සිට *${pending.results.length}* දක්වා තෝරන්න.`,
+            text: `❌ Number එක වැරදියි. *1* සිට *${pending.results.length}* දක්වා තෝරන්න.\nහැම එකම ඕනි නම්: \`${prefix}xnxx all\``,
           },
           { quoted: msg }
         );
@@ -245,13 +360,16 @@ module.exports = {
 │
 │  ❌ *Usage:*
 │  ${prefix}xnxx <search query>
-│  ${prefix}xnxx <xnxx url>
-│  ${prefix}xnxx <number>   ← after search
+│  ${prefix}xnxx <number>     ← එක video එකක්
+│  ${prefix}xnxx all          ← හැම video එකම
+│  ${prefix}xnxxdl <url>      ← direct link
+│  ${prefix}xnxx <url>        ← direct link
 │
 │  📌 *Example:*
 │  ${prefix}xnxx sri lanka
 │  ${prefix}xnxx 1
-│  ${prefix}xnxx https://www.xnxx.tv/video-xxxxx/...
+│  ${prefix}xnxx all
+│  ${prefix}xnxxdl https://www.xnxx.tv/video-xxxxx/...
 │
 │  ⚠️ *18+ only*
 │
@@ -264,7 +382,7 @@ module.exports = {
     const query = args.join(' ').trim();
     const directUrl = extractUrl(query);
 
-    // ===== Direct URL =====
+    // Direct URL on .xnxx
     if (directUrl || isXnxxUrl(query)) {
       return downloadAndSend({
         sock,
@@ -283,7 +401,6 @@ module.exports = {
     );
 
     try {
-      // API uses "url" query param for the search text
       const apiUrl = `${SEARCH_API}?apiKey=${API_KEY}&url=${encodeURIComponent(query)}`;
       const apiRes = await axios.get(apiUrl, {
         timeout: 60000,
@@ -313,7 +430,7 @@ module.exports = {
 
       const cleaned = results
         .filter((r) => r && (r.url || r.link) && (r.title || r.name))
-        .slice(0, 12)
+        .slice(0, 25)
         .map((r) => ({
           title: r.title || r.name || 'Untitled',
           url: r.url || r.link,
@@ -336,20 +453,42 @@ module.exports = {
 
       pendingSearch.set(from, { results: cleaned, timeout, createdAt: Date.now() });
 
-      let list = `╭───「 🔥 *XNXX SEARCH* 」───╮\n│\n│  🔎 *Query* ›  ${query.slice(0, 40)}\n│\n`;
+      const header = `╭───「 🔥 *XNXX SEARCH* 」───╮\n│\n│  🔎 *Query* ›  ${query.slice(0, 40)}\n│  📦 *Total* ›  ${cleaned.length}\n│\n`;
+      let body = '';
       cleaned.forEach((item, i) => {
-        list += `│  *${i + 1}.* ${String(item.title).slice(0, 55)}\n`;
+        body += `│  *${i + 1}.* ${String(item.title).slice(0, 55)}\n`;
       });
-      list += `│\n│  👇 තෝරන්න: *${prefix}xnxx <number>*\n│  ⏳ විනාඩි 3ක් ඇතුළත\n│\n│  ⚠️ *18+ only*\n│\n╰──────────────────────╯`;
+      const footer = `\n│  👇 තෝරන්න:\n│  • *${prefix}xnxx <number>*  → එකක්\n│  • *${prefix}xnxx all*       → හැම එකම (max ${MAX_ALL_DOWNLOADS})\n│  ⏳ විනාඩි 5ක් ඇතුළත\n│\n│  ⚠️ *18+ only*\n│\n╰──────────────────────╯`;
+
+      const full = header + body + footer;
 
       await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
-      await sock.sendMessage(from, { text: list }, { quoted: msg });
+
+      if (full.length > 3500) {
+        const mid = Math.ceil(cleaned.length / 2);
+        let p1 = header;
+        cleaned.slice(0, mid).forEach((item, i) => {
+          p1 += `│  *${i + 1}.* ${String(item.title).slice(0, 55)}\n`;
+        });
+        p1 += `│\n│  _(continued...)_\n╰──────────────────────╯`;
+        let p2 = `╭───「 🔥 *continued* 」───╮\n│\n`;
+        cleaned.slice(mid).forEach((item, i) => {
+          p2 += `│  *${mid + i + 1}.* ${String(item.title).slice(0, 55)}\n`;
+        });
+        p2 += footer;
+        await sock.sendMessage(from, { text: p1 }, { quoted: msg });
+        await sock.sendMessage(from, { text: p2 }, { quoted: msg });
+      } else {
+        await sock.sendMessage(from, { text: full }, { quoted: msg });
+      }
     } catch (err) {
       console.error('XNXX Search Error:', err.message);
-      await sock.sendMessage(from, {
-        text: `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\``,
-        edit: loading.key,
-      }).catch(() => {});
+      await sock
+        .sendMessage(from, {
+          text: `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\``,
+          edit: loading.key,
+        })
+        .catch(() => {});
     }
   },
 };
