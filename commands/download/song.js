@@ -1,4 +1,6 @@
 const axios = require('axios');
+const https = require('https');
+const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -86,110 +88,179 @@ async function toMp3(inputBuffer, inputExt) {
   }
 }
 
-/** Stream download from file API into Buffer - WITH BETTER ERROR DETECTION */
+/** Stream download from file API into Buffer (chunk collector — fixes 0-byte body) */
 async function streamSongFile(youtubeUrl) {
-  const res = await axios.get(FILE_API, {
-    params: { apiKey: API_KEY, text: youtubeUrl },
-    responseType: 'arraybuffer',
-    timeout: 180000,
-    maxContentLength: MAX_WA_BYTES + 10 * 1024 * 1024,
-    maxBodyLength: MAX_WA_BYTES + 10 * 1024 * 1024,
-    validateStatus: () => true,
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      Accept: '*/*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'identity',
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'cross-site',
-    },
-    maxRedirects: 5,
+  const apiUrl =
+    FILE_API +
+    '?apiKey=' +
+    encodeURIComponent(API_KEY) +
+    '&text=' +
+    encodeURIComponent(youtubeUrl);
+
+  // Method 1: native https get + collect chunks (most reliable on Heroku)
+  const buffer = await new Promise((resolve, reject) => {
+    const lib = apiUrl.startsWith('https') ? https : http;
+    const req = lib.get(
+      apiUrl,
+      {
+        timeout: 180000,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: '*/*',
+          'Accept-Encoding': 'identity',
+          Connection: 'keep-alive',
+        },
+      },
+      (res) => {
+        const status = res.statusCode || 0;
+        const ct = String(res.headers['content-type'] || '').toLowerCase();
+        const chunks = [];
+        let total = 0;
+
+        res.on('data', (chunk) => {
+          chunks.push(chunk);
+          total += chunk.length;
+          if (total > MAX_WA_BYTES + 10 * 1024 * 1024) {
+            req.destroy();
+            reject(new Error('File too large'));
+          }
+        });
+
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          console.log(
+            `[FILE_API] Status: ${status}, ContentType: ${ct}, BufferSize: ${buf.length}bytes`
+          );
+          resolve({ status, ct, buffer: buf });
+        });
+
+        res.on('error', reject);
+      }
+    );
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Download timeout'));
+    });
+    req.on('error', reject);
   });
 
-  const buffer = Buffer.from(res.data || []);
-  const ct = String(res.headers?.['content-type'] || '').toLowerCase();
+  let { status, ct, buffer: body } = buffer;
 
-  console.log(`[FILE_API] Status: ${res.status}, ContentType: ${ct}, BufferSize: ${buffer.length}bytes`);
-
-  // ===== FIX 1: Detect HTML error pages =====
-  if (buffer.length > 0 && buffer.length < 10000) {
-    const bufStr = buffer.toString('utf8', 0, Math.min(500, buffer.length));
-    console.log(`[FILE_API] First 500 chars: ${bufStr.substring(0, 200)}`);
-
-    if (bufStr.includes('<!DOCTYPE') || bufStr.includes('<html') || bufStr.includes('<script')) {
-      throw new Error(
-        'API returned HTML error page (likely rate limited or blocked). Try again in 5 mins.'
+  // Method 2 fallback: axios if native returned empty but claimed 200
+  if (status === 200 && body.length === 0) {
+    console.log('[FILE_API] Native got 0 bytes — retry with axios stream...');
+    try {
+      const res = await axios.get(apiUrl, {
+        responseType: 'stream',
+        timeout: 180000,
+        maxRedirects: 5,
+        validateStatus: () => true,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: '*/*',
+          'Accept-Encoding': 'identity',
+        },
+        // prevent axios from decompressing incorrectly
+        decompress: false,
+      });
+      status = res.status;
+      ct = String(res.headers['content-type'] || '').toLowerCase();
+      const chunks = [];
+      await new Promise((resolve, reject) => {
+        res.data.on('data', (c) => chunks.push(c));
+        res.data.on('end', resolve);
+        res.data.on('error', reject);
+      });
+      body = Buffer.concat(chunks);
+      console.log(
+        `[FILE_API] axios stream Status: ${status}, CT: ${ct}, Size: ${body.length}bytes`
       );
+    } catch (e) {
+      console.error('[FILE_API] axios stream fallback failed:', e.message);
     }
+  }
 
-    if (bufStr.trim().startsWith('{') || bufStr.trim().startsWith('[')) {
+  // Method 3: arraybuffer one more time
+  if (status === 200 && body.length === 0) {
+    console.log('[FILE_API] Still 0 bytes — retry axios arraybuffer...');
+    try {
+      const res = await axios.get(FILE_API, {
+        params: { apiKey: API_KEY, text: youtubeUrl },
+        responseType: 'arraybuffer',
+        timeout: 180000,
+        maxRedirects: 5,
+        validateStatus: () => true,
+        decompress: false,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: '*/*',
+          'Accept-Encoding': 'identity',
+        },
+      });
+      status = res.status;
+      ct = String(res.headers['content-type'] || '').toLowerCase();
+      body = Buffer.from(res.data || []);
+      console.log(
+        `[FILE_API] arraybuffer Status: ${status}, CT: ${ct}, Size: ${body.length}bytes`
+      );
+    } catch (e) {
+      console.error('[FILE_API] arraybuffer failed:', e.message);
+    }
+  }
+
+  if (body.length > 0 && body.length < 10000) {
+    const bufStr = body.toString('utf8', 0, Math.min(500, body.length));
+    console.log(`[FILE_API] First chars: ${bufStr.substring(0, 200)}`);
+    if (bufStr.includes('<!DOCTYPE') || bufStr.includes('<html')) {
+      throw new Error('API returned HTML error page (rate limit / block). Try again later.');
+    }
+    if (bufStr.trim().startsWith('{')) {
       try {
         const json = JSON.parse(bufStr);
         throw new Error(json.message || json.error || 'API JSON Error');
       } catch (e) {
-        if (e.message && e.message.includes('Unexpected token')) {
-          throw new Error('API returned invalid response');
-        }
-        throw e;
+        if (e.message && !e.message.includes('Unexpected')) throw e;
       }
     }
   }
 
-  if (res.status !== 200) {
-    let msg = `HTTP ${res.status}`;
-    if (buffer.length > 0 && buffer.length < 5000) {
+  if (status !== 200) {
+    let msg = `HTTP ${status}`;
+    if (body.length > 0 && body.length < 5000) {
       try {
-        const jsonStr = buffer.toString('utf8');
-        if (jsonStr.includes('{') || jsonStr.includes('[')) {
-          const json = JSON.parse(jsonStr);
-          msg = json.message || json.error || msg;
-        }
+        const json = JSON.parse(body.toString('utf8'));
+        msg = json.message || json.error || msg;
       } catch (_) {}
     }
     throw new Error(msg);
   }
 
-  // ===== FIX 2: Check for HTML in successful response =====
-  if (ct.includes('text/html') || ct.includes('application/x-www-form-urlencoded')) {
-    console.error('[FILE_API] Got HTML instead of audio:', ct);
+  if (ct.includes('text/html')) {
+    throw new Error('API returned HTML instead of audio (blocked / rate limited).');
+  }
+
+  if (body.length < 1000) {
     throw new Error(
-      'API returned HTML (may be rate limited or region blocked). Try:\n1. Different YouTube link\n2. Check Hashu API status\n3. Wait 10 minutes'
+      'API returned empty audio (0 bytes). Railway API may be down or blocked from Heroku. Try again or use a different video.'
     );
   }
 
-  // ===== FIX 3: Check for empty / tiny response =====
-  if (buffer.length < 1000) {
-    const bufStr = buffer.toString('utf8').trim();
-    console.error('[FILE_API] Buffer too small or corrupted:', bufStr);
-
-    if (!bufStr) {
-      throw new Error(
-        'API returned empty response (Connection lost or API down). Try again.'
-      );
-    }
-
-    if (bufStr.includes('error') || bufStr.includes('fail')) {
-      throw new Error(`API Error: ${bufStr}`);
-    }
-
-    throw new Error(
-      `Response too small (${buffer.length}bytes). File may be corrupted or API blocked.`
-    );
-  }
-
-  // JSON error with larger body still possible
-  if (isJsonBuffer(buffer) || ct.includes('application/json')) {
+  if (isJsonBuffer(body) || ct.includes('application/json')) {
     let msg = 'API returned JSON error';
     try {
-      msg = JSON.parse(buffer.toString()).message || msg;
+      msg = JSON.parse(body.toString()).message || msg;
     } catch (_) {}
     throw new Error(msg);
   }
 
-  console.log(`[FILE_API] ✅ Valid audio buffer received: ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
-  return { buffer, contentType: ct };
+  console.log(
+    `[FILE_API] ✅ Valid audio buffer: ${(body.length / 1024 / 1024).toFixed(2)}MB`
+  );
+  return { buffer: body, contentType: ct };
 }
 
 async function fetchSongInfo(youtubeUrl) {
