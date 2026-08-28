@@ -254,34 +254,50 @@ async function downloadAndSend({ sock, msg, from, item }) {
 
     const fileName = `${sanitizeFileName(title)}.${ext}`;
 
-    // Baileys: send as audio buffer (streamed already into memory)
+    // ===== FIXED AUDIO SENDING =====
     try {
-      await sock.sendMessage(
-        from,
-        {
-          audio: audioBuffer,
-          mimetype: mimetype,
-          fileName: fileName,
-          ptt: false,
-        },
-        { quoted: msg }
-      );
+      console.log(`[AUDIO] Sending: ${fileName} (${sizeMB}MB)`);
+      
+      // Attempt 1: Direct audio send (most Baileys versions support this)
+      const audioMsg = {
+        audio: audioBuffer,
+        mimetype: 'audio/mpeg', // Always MP3 after conversion
+        fileName: fileName,
+        ptt: false,
+      };
+      
+      await sock.sendMessage(from, audioMsg, { quoted: msg });
+      console.log('[AUDIO] ✅ Sent successfully as audio');
+      
     } catch (e1) {
-      console.error('audio send failed:', e1.message);
-      // Document fallback (always works on WA)
+      console.error('[AUDIO] Direct send failed:', e1.message);
+      
       try {
+        // Attempt 2: Document fallback (more reliable, always works)
+        console.log('[AUDIO] Retrying as document...');
         await sock.sendMessage(
           from,
           {
             document: audioBuffer,
-            mimetype: mimetype,
+            mimetype: 'audio/mpeg',
             fileName: fileName,
-            caption: '📁 Audio',
+            caption: `🎵 ${String(title).slice(0, 50)}`,
           },
           { quoted: msg }
         );
+        console.log('[AUDIO] ✅ Sent successfully as document');
+        
       } catch (e2) {
-        throw e2;
+        console.error('[AUDIO] Document send failed:', e2.message);
+        
+        // Attempt 3: Text-only fallback (last resort)
+        await sock.sendMessage(
+          from,
+          {
+            text: `❌ Audio send fail (${sizeMB}MB)\n\n📝 Error: \`${e2.message}\`\n\n💡 Try venut song එකක් හෝ smaller file එකක්.`,
+          },
+          { quoted: msg }
+        );
       }
     }
   } catch (err) {
