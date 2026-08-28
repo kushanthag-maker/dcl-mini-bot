@@ -792,6 +792,25 @@
     };
 
 
+    function loadServerSettings(phone) {
+      var q = phone ? ('?phone=' + encodeURIComponent(phone)) : '';
+      return fetch('/api/settings' + q).then(function(r){return r.json()}).then(function(s){
+        if (!s) return s;
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(Object.assign(loadSettings(), {
+          logo: s.logo, botName: s.botName, menuStyle: s.menuStyle,
+          statusSeen: s.statusSeen, antiDelete: s.antiDelete
+        })));
+        applySettings(loadSettings());
+        if (s.botName) {
+          var el;
+          el = document.getElementById('brandTitle'); if (el) el.textContent = s.botName;
+          el = document.getElementById('homeBotName'); if (el) el.textContent = s.botName;
+          el = document.getElementById('heroTitle'); if (el) el.textContent = s.botName;
+        }
+        return s;
+      }).catch(function(){ return null; });
+    }
+
     /* ===== Settings OTP auth ===== */
     const AUTH_KEY = 'zayra_settings_auth';
     function getAuth() {
@@ -811,7 +830,7 @@
       document.getElementById('settingsLock').style.display = 'none';
       document.getElementById('settingsPanel').style.display = 'block';
       document.getElementById('authPhoneLabel').textContent = phone;
-      applySettings(loadSettings());
+      loadServerSettings(phone).then(function(){ applySettings(loadSettings()); });
     }
     function lockSettingsUI() {
       document.getElementById('settingsLock').style.display = 'block';
@@ -1144,6 +1163,9 @@
 
     /* ===== Init ===== */
     applySettings(loadSettings());
+    restoreSettingsAuth();
+    var _a = getAuth();
+    if (_a && _a.phone) loadServerSettings(_a.phone);
     renderCommands();
     refresh();
     setInterval(refresh, 5000);
