@@ -1,8 +1,11 @@
 const config = require('../../config');
+const { getSettings } = require('../../lib/botSettings');
 const moment = require('moment-timezone');
 const { getAllCommands } = require('../../lib/commandHandler');
 
-const MENU_LOGO = 'https://files.catbox.moe/4dvou4.png';
+function getMenuLogo() {
+  try { return getSettings().logo || 'https://files.catbox.moe/4dvou4.png'; } catch { return 'https://files.catbox.moe/4dvou4.png'; }
+}
 
 const CATEGORY_META = {
   owner:    { title: '𝗢𝗪𝗡𝗘𝗥',    emoji: '👑', order: 1 },
@@ -70,7 +73,8 @@ module.exports = {
   async execute({ sock, msg, from }) {
     try {
       const prefix = config.prefix || '.';
-      const botName = config.botName || 'ZAYRAX MINI';
+      const settings = getSettings();
+      const botName = settings.botName || config.botName || 'Zayra';
       const runtime = formatUptime(process.uptime());
       const now = moment().tz(config.timezone || 'Asia/Colombo').format('YYYY-MM-DD  HH:mm');
       const userJid = msg.key.participant || msg.key.remoteJid || '';
@@ -101,7 +105,7 @@ module.exports = {
 ╭───「 ℹ️ *𝗜𝗡𝗙𝗢* 」───╮
 │
 │  💡 Type *${prefix}menu* anytime
-│  🔥 *ZAYRAX MINI* › _v1.0_
+│  🔥 *Zayra* › _v1.0_
 │  💜 Fast · Stable · Secure
 │
 ╰──────────────────────╯
@@ -112,7 +116,7 @@ module.exports = {
       await sock.sendMessage(
         from,
         {
-          image: { url: MENU_LOGO },
+          image: { url: getMenuLogo() },
           caption: menuText,
           mentions: [userJid],
         },
