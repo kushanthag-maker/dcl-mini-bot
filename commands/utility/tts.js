@@ -1,11 +1,16 @@
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 const config = require('../../config');
 
 const API_URL = 'https://whiteshadow-x-api.onrender.com/api/tools/tts';
 const API_TOKEN = 'CkExxE';
 const MAX_WA_BYTES = 16 * 1024 * 1024;
 
-// Common language codes
 const LANGS = {
   si: 'Sinhala',
   en: 'English',
@@ -25,6 +30,35 @@ const LANGS = {
   ms: 'Malay',
   th: 'Thai',
 };
+
+/** MP3 → OGG Opus (WhatsApp voice-note compatible) */
+async function toOpus(mp3Buffer) {
+  const tmp = os.tmpdir();
+  const inFile = path.join(tmp, `tts_in_${Date.now()}.mp3`);
+  const outFile = path.join(tmp, `tts_out_${Date.now()}.ogg`);
+  try {
+    fs.writeFileSync(inFile, mp3Buffer);
+    await execFileAsync(
+      'ffmpeg',
+      [
+        '-y',
+        '-i', inFile,
+        '-c:a', 'libopus',
+        '-b:a', '64k',
+        '-vbr', 'on',
+        '-compression_level', '10',
+        '-frame_duration', '60',
+        '-application', 'voip',
+        outFile,
+      ],
+      { timeout: 60000 }
+    );
+    return fs.readFileSync(outFile);
+  } finally {
+    try { fs.unlinkSync(inFile); } catch (_) {}
+    try { fs.unlinkSync(outFile); } catch (_) {}
+  }
+}
 
 module.exports = {
   name: 'tts',
@@ -50,9 +84,7 @@ module.exports = {
 │  ${prefix}tts en Hello how are you
 │  ${prefix}tts si ආයුබෝවන්
 │
-│  🌐 *Lang codes:*
-│  si en ta hi ja ko zh ar es fr ...
-│  (default: *si*)
+│  🌐 default lang: *si*
 │
 ╰──────────────────────╯`,
         },
@@ -63,7 +95,6 @@ module.exports = {
     let lang = 'si';
     let text = args.join(' ').trim();
 
-    // .tts en Hello world  OR  .tts si ආයුබෝවන්
     if (args.length >= 2 && /^[a-z]{2}$/i.test(args[0])) {
       lang = args[0].toLowerCase();
       text = args.slice(1).join(' ').trim();
@@ -93,11 +124,7 @@ module.exports = {
 
     try {
       const res = await axios.get(API_URL, {
-        params: {
-          text,
-          lang,
-          apitoken: API_TOKEN,
-        },
+        params: { text, lang, apitoken: API_TOKEN },
         responseType: 'arraybuffer',
         timeout: 60000,
         maxContentLength: MAX_WA_BYTES,
@@ -111,58 +138,72 @@ module.exports = {
       });
 
       const ct = String(res.headers?.['content-type'] || '').toLowerCase();
-      const buffer = Buffer.from(res.data || []);
+      const mp3Buffer = Buffer.from(res.data || []);
 
-      // JSON error?
       if (
         res.status !== 200 ||
         ct.includes('application/json') ||
         ct.includes('text/html') ||
-        buffer.length < 500
+        mp3Buffer.length < 500
       ) {
         let msgErr = `HTTP ${res.status}`;
         try {
-          const j = JSON.parse(buffer.toString('utf8'));
+          const j = JSON.parse(mp3Buffer.toString('utf8'));
           msgErr = j.message || j.error || j.msg || msgErr;
         } catch (_) {}
         throw new Error(msgErr);
       }
 
-      // ID3 / MPEG check
-      const isMp3 =
-        (buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) ||
-        (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) ||
-        ct.includes('audio');
-
-      if (!isMp3 && !ct.includes('audio')) {
-        throw new Error('Invalid audio response');
-      }
-
       await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
-      const fileName = `tts-${lang}.mp3`;
-
+      // 1) Prefer Opus voice note (WhatsApp native ptt format)
+      let sent = false;
       try {
-        // ptt: true = voice note style (nice for TTS)
+        const opus = await toOpus(mp3Buffer);
+        if (opus && opus.length > 200) {
+          await sock.sendMessage(
+            from,
+            {
+              audio: opus,
+              mimetype: 'audio/ogg; codecs=opus',
+              ptt: true,
+            },
+            { quoted: msg }
+          );
+          sent = true;
+        }
+      } catch (e) {
+        console.error('TTS opus convert fail:', e.message);
+      }
+
+      // 2) Fallback: normal MP3 audio (not voice-note) — always plays
+      if (!sent) {
+        try {
+          await sock.sendMessage(
+            from,
+            {
+              audio: mp3Buffer,
+              mimetype: 'audio/mpeg',
+              ptt: false,
+              fileName: `tts-${lang}.mp3`,
+            },
+            { quoted: msg }
+          );
+          sent = true;
+        } catch (e2) {
+          console.error('TTS mp3 send fail:', e2.message);
+        }
+      }
+
+      // 3) Last resort: document
+      if (!sent) {
         await sock.sendMessage(
           from,
           {
-            audio: buffer,
+            document: mp3Buffer,
             mimetype: 'audio/mpeg',
-            ptt: true,
-            fileName,
-          },
-          { quoted: msg }
-        );
-      } catch (e1) {
-        console.error('TTS ptt fail:', e1.message);
-        await sock.sendMessage(
-          from,
-          {
-            audio: buffer,
-            mimetype: 'audio/mpeg',
-            ptt: false,
-            fileName,
+            fileName: `tts-${lang}.mp3`,
+            caption: '🔊 TTS audio',
           },
           { quoted: msg }
         );
