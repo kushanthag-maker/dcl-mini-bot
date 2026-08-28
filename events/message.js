@@ -1,7 +1,6 @@
 const config = require('../config');
 const logger = require('../lib/logger');
 const { getCommand } = require('../lib/commandHandler');
-const { findSessionIdBySock } = require('../lib/sessionManager');
 
 const rateMap = new Map();
 
@@ -17,7 +16,7 @@ function checkRateLimit(jid) {
   return entry.count <= (config.rateLimit || 20);
 }
 
-async function handleMessage(sock, msg) {
+async function handleMessage(sock, msg, sessionId) {
   try {
     if (!msg.message || !sock) return;
 
@@ -81,7 +80,6 @@ async function handleMessage(sock, msg) {
 
     logger.command(commandName, senderNumber + (isFromMe ? ' (self)' : ''));
 
-    const sessionId = findSessionIdBySock(sock);
     await cmd.execute({
       sock,
       msg,
@@ -94,7 +92,7 @@ async function handleMessage(sock, msg) {
       args,
       body,
       config,
-      sessionId,
+      sessionId: sessionId || null,
     });
   } catch (err) {
     logger.error('handleMessage error', err);
