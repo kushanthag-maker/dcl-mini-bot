@@ -1,10 +1,11 @@
 const config = require('../../config');
 const { getSettings } = require('../../lib/botSettings');
+const { findSessionIdBySock } = require('../../lib/sessionManager');
 const moment = require('moment-timezone');
 const os = require('os');
 
-function getAliveLogo() {
-  try { return getSettings().logo || 'https://files.catbox.moe/4dvou4.png'; } catch { return 'https://files.catbox.moe/4dvou4.png'; }
+function getAliveLogo(sessionId) {
+  try { return getSettings(sessionId).logo || 'https://files.catbox.moe/4dvou4.png'; } catch { return 'https://files.catbox.moe/4dvou4.png'; }
 }
 
 function formatUptime(sec) {
@@ -33,9 +34,10 @@ module.exports = {
   description: 'Check if bot is alive with system status',
   category: 'utility',
 
-  async execute({ sock, msg, from }) {
+  async execute({ sock, msg, from, sessionId }) {
     try {
-      const settings = getSettings();
+      const sid = sessionId || findSessionIdBySock(sock);
+      const settings = getSettings(sid);
       const botName = settings.botName || config.botName || 'Zayra';
       const prefix = config.prefix || '.';
       const runtime = formatUptime(process.uptime());
@@ -90,7 +92,7 @@ module.exports = {
       await sock.sendMessage(
         from,
         {
-          image: { url: getAliveLogo() },
+          image: { url: getAliveLogo(sid) },
           caption,
           mentions: [userJid],
         },
