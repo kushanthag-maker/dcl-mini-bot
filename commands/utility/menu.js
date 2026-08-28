@@ -1,6 +1,5 @@
 const config = require('../../config');
 const { getSettings } = require('../../lib/botSettings');
-const { findSessionIdBySock } = require('../../lib/sessionManager');
 const moment = require('moment-timezone');
 const { getAllCommands } = require('../../lib/commandHandler');
 
@@ -74,7 +73,7 @@ module.exports = {
   async execute({ sock, msg, from, sessionId }) {
     try {
       const prefix = config.prefix || '.';
-      const sid = sessionId || findSessionIdBySock(sock);
+      const sid = sessionId || null;
       const settings = getSettings(sid);
       const botName = settings.botName || config.botName || 'Zayra';
       const runtime = formatUptime(process.uptime());
