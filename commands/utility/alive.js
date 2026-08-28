@@ -1,8 +1,11 @@
 const config = require('../../config');
+const { getSettings } = require('../../lib/botSettings');
 const moment = require('moment-timezone');
 const os = require('os');
 
-const ALIVE_LOGO = 'https://files.catbox.moe/4dvou4.png';
+function getAliveLogo() {
+  try { return getSettings().logo || 'https://files.catbox.moe/4dvou4.png'; } catch { return 'https://files.catbox.moe/4dvou4.png'; }
+}
 
 function formatUptime(sec) {
   const d = Math.floor(sec / 86400);
@@ -32,7 +35,8 @@ module.exports = {
 
   async execute({ sock, msg, from }) {
     try {
-      const botName = config.botName || 'ZAYRAX MINI';
+      const settings = getSettings();
+      const botName = settings.botName || config.botName || 'Zayra';
       const prefix = config.prefix || '.';
       const runtime = formatUptime(process.uptime());
       const now = moment()
@@ -78,7 +82,7 @@ module.exports = {
 │
 │  💡 Type *${prefix}menu* for commands
 │  💜 Fast · Stable · Secure
-│  🔥 *ZAYRAX MINI* › _v1.0_
+│  🔥 *Zayra* › _v1.0_
 │
 ╰──────────────────────╯
 `.trim();
@@ -86,7 +90,7 @@ module.exports = {
       await sock.sendMessage(
         from,
         {
-          image: { url: ALIVE_LOGO },
+          image: { url: getAliveLogo() },
           caption,
           mentions: [userJid],
         },
