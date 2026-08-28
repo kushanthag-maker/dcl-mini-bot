@@ -86,7 +86,7 @@ async function toMp3(inputBuffer, inputExt) {
   }
 }
 
-/** Stream download from file API into Buffer */
+/** Stream download from file API into Buffer - WITH BETTER ERROR DETECTION */
 async function streamSongFile(youtubeUrl) {
   const res = await axios.get(FILE_API, {
     params: { apiKey: API_KEY, text: youtubeUrl },
@@ -99,24 +99,87 @@ async function streamSongFile(youtubeUrl) {
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       Accept: '*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'identity',
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'cross-site',
     },
-    // follow redirects
     maxRedirects: 5,
   });
 
   const buffer = Buffer.from(res.data || []);
   const ct = String(res.headers?.['content-type'] || '').toLowerCase();
 
+  console.log(`[FILE_API] Status: ${res.status}, ContentType: ${ct}, BufferSize: ${buffer.length}bytes`);
+
+  // ===== FIX 1: Detect HTML error pages =====
+  if (buffer.length > 0 && buffer.length < 10000) {
+    const bufStr = buffer.toString('utf8', 0, Math.min(500, buffer.length));
+    console.log(`[FILE_API] First 500 chars: ${bufStr.substring(0, 200)}`);
+
+    if (bufStr.includes('<!DOCTYPE') || bufStr.includes('<html') || bufStr.includes('<script')) {
+      throw new Error(
+        'API returned HTML error page (likely rate limited or blocked). Try again in 5 mins.'
+      );
+    }
+
+    if (bufStr.trim().startsWith('{') || bufStr.trim().startsWith('[')) {
+      try {
+        const json = JSON.parse(bufStr);
+        throw new Error(json.message || json.error || 'API JSON Error');
+      } catch (e) {
+        if (e.message && e.message.includes('Unexpected token')) {
+          throw new Error('API returned invalid response');
+        }
+        throw e;
+      }
+    }
+  }
+
   if (res.status !== 200) {
     let msg = `HTTP ${res.status}`;
-    if (isJsonBuffer(buffer)) {
+    if (buffer.length > 0 && buffer.length < 5000) {
       try {
-        msg = JSON.parse(buffer.toString()).message || msg;
+        const jsonStr = buffer.toString('utf8');
+        if (jsonStr.includes('{') || jsonStr.includes('[')) {
+          const json = JSON.parse(jsonStr);
+          msg = json.message || json.error || msg;
+        }
       } catch (_) {}
     }
     throw new Error(msg);
   }
 
+  // ===== FIX 2: Check for HTML in successful response =====
+  if (ct.includes('text/html') || ct.includes('application/x-www-form-urlencoded')) {
+    console.error('[FILE_API] Got HTML instead of audio:', ct);
+    throw new Error(
+      'API returned HTML (may be rate limited or region blocked). Try:\n1. Different YouTube link\n2. Check Hashu API status\n3. Wait 10 minutes'
+    );
+  }
+
+  // ===== FIX 3: Check for empty / tiny response =====
+  if (buffer.length < 1000) {
+    const bufStr = buffer.toString('utf8').trim();
+    console.error('[FILE_API] Buffer too small or corrupted:', bufStr);
+
+    if (!bufStr) {
+      throw new Error(
+        'API returned empty response (Connection lost or API down). Try again.'
+      );
+    }
+
+    if (bufStr.includes('error') || bufStr.includes('fail')) {
+      throw new Error(`API Error: ${bufStr}`);
+    }
+
+    throw new Error(
+      `Response too small (${buffer.length}bytes). File may be corrupted or API blocked.`
+    );
+  }
+
+  // JSON error with larger body still possible
   if (isJsonBuffer(buffer) || ct.includes('application/json')) {
     let msg = 'API returned JSON error';
     try {
@@ -125,10 +188,7 @@ async function streamSongFile(youtubeUrl) {
     throw new Error(msg);
   }
 
-  if (buffer.length < 5000) {
-    throw new Error(`File too small (${buffer.length} bytes)`);
-  }
-
+  console.log(`[FILE_API] ✅ Valid audio buffer received: ${(buffer.length / 1024 / 1024).toFixed(2)}MB`);
   return { buffer, contentType: ct };
 }
 
@@ -254,50 +314,34 @@ async function downloadAndSend({ sock, msg, from, item }) {
 
     const fileName = `${sanitizeFileName(title)}.${ext}`;
 
-    // ===== FIXED AUDIO SENDING =====
+    // Baileys: send as audio buffer (streamed already into memory)
     try {
-      console.log(`[AUDIO] Sending: ${fileName} (${sizeMB}MB)`);
-      
-      // Attempt 1: Direct audio send (most Baileys versions support this)
-      const audioMsg = {
-        audio: audioBuffer,
-        mimetype: 'audio/mpeg', // Always MP3 after conversion
-        fileName: fileName,
-        ptt: false,
-      };
-      
-      await sock.sendMessage(from, audioMsg, { quoted: msg });
-      console.log('[AUDIO] ✅ Sent successfully as audio');
-      
+      await sock.sendMessage(
+        from,
+        {
+          audio: audioBuffer,
+          mimetype: mimetype,
+          fileName: fileName,
+          ptt: false,
+        },
+        { quoted: msg }
+      );
     } catch (e1) {
-      console.error('[AUDIO] Direct send failed:', e1.message);
-      
+      console.error('audio send failed:', e1.message);
+      // Document fallback (always works on WA)
       try {
-        // Attempt 2: Document fallback (more reliable, always works)
-        console.log('[AUDIO] Retrying as document...');
         await sock.sendMessage(
           from,
           {
             document: audioBuffer,
-            mimetype: 'audio/mpeg',
+            mimetype: mimetype,
             fileName: fileName,
-            caption: `🎵 ${String(title).slice(0, 50)}`,
+            caption: '📁 Audio',
           },
           { quoted: msg }
         );
-        console.log('[AUDIO] ✅ Sent successfully as document');
-        
       } catch (e2) {
-        console.error('[AUDIO] Document send failed:', e2.message);
-        
-        // Attempt 3: Text-only fallback (last resort)
-        await sock.sendMessage(
-          from,
-          {
-            text: `❌ Audio send fail (${sizeMB}MB)\n\n📝 Error: \`${e2.message}\`\n\n💡 Try venut song එකක් හෝ smaller file එකක්.`,
-          },
-          { quoted: msg }
-        );
+        throw e2;
       }
     }
   } catch (err) {
