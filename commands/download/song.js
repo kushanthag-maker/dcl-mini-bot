@@ -6,6 +6,7 @@ const config = require('../../config');
 const API_KEY = 'hashu_cd4b0a9d325539de660602e7d8d38d61';
 const SEARCH_API = 'https://hashu-apis-production.up.railway.app/api/song/search';
 const YTDL_API = 'https://hashu-apis-production.up.railway.app/api/ytdl';
+const LOADER_START = 'https://loader.to/ajax/download.php';
 const MAX_WA_BYTES = 60 * 1024 * 1024;
 const PENDING_TTL_MS = 2 * 60 * 1000;
 
@@ -34,7 +35,10 @@ function formatDuration(sec) {
   return m + ':' + String(r).padStart(2, '0');
 }
 
-/** Download URL → Buffer via native chunks */
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 function downloadBuffer(url, redirects = 0) {
   return new Promise((resolve, reject) => {
     if (redirects > 5) return reject(new Error('Too many redirects'));
@@ -49,22 +53,19 @@ function downloadBuffer(url, redirects = 0) {
           Accept: 'audio/mpeg,audio/*,*/*',
           'Accept-Encoding': 'identity',
           Referer: 'https://www.youtube.com/',
-          Origin: 'https://www.youtube.com',
         },
       },
       (res) => {
-        // follow redirects
         if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
           res.resume();
           return downloadBuffer(res.headers.location, redirects + 1).then(resolve, reject);
         }
-
         const chunks = [];
         let total = 0;
         res.on('data', (c) => {
           chunks.push(c);
           total += c.length;
-          if (total > MAX_WA_BYTES + 5 * 1024 * 1024) {
+          if (total > MAX_WA_BYTES + 8 * 1024 * 1024) {
             req.destroy();
             reject(new Error('File too large'));
           }
@@ -87,40 +88,107 @@ function downloadBuffer(url, redirects = 0) {
   });
 }
 
-/** ytdl API → metadata + direct_link */
 async function getYtdlInfo(youtubeUrl) {
   const res = await axios.get(YTDL_API, {
     params: { apiKey: API_KEY, text: youtubeUrl },
     timeout: 90000,
     validateStatus: () => true,
   });
-
   if (res.status !== 200 || !res.data || res.data.success === false) {
-    const msg = res.data?.message || res.data?.error || `ytdl HTTP ${res.status}`;
-    throw new Error(msg);
+    throw new Error(res.data?.message || `ytdl HTTP ${res.status}`);
   }
-
-  const result = res.data.results || res.data.result || res.data.data || res.data;
-  const direct =
-    result.direct_link ||
-    result.directLink ||
-    result.download ||
-    result.url ||
-    result.link ||
-    null;
-
-  if (!direct) {
-    throw new Error('No direct_link in ytdl response');
-  }
-
+  const result = res.data.results || res.data.result || res.data.data || {};
   return {
-    title: result.title || 'Song',
+    title: result.title || null,
     duration: result.duration || null,
     quality: result.quality || result.type || 'mp3',
-    type: result.type || 'mp3',
-    direct_link: direct,
-    source: result.source || '',
+    direct_link: result.direct_link || result.directLink || result.download || null,
   };
+}
+
+/** Try Hashu direct_link — often 404 on zeta CDN */
+async function tryHashuDirect(directLink) {
+  if (!directLink) return null;
+  try {
+    let { status, contentType, buffer } = await downloadBuffer(directLink);
+    if (status !== 200 || buffer.length < 5000) {
+      const ax = await axios.get(directLink, {
+        responseType: 'arraybuffer',
+        timeout: 120000,
+        maxRedirects: 5,
+        validateStatus: () => true,
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          Accept: 'audio/mpeg,audio/*',
+          Referer: 'https://www.youtube.com/',
+        },
+      });
+      status = ax.status;
+      contentType = String(ax.headers['content-type'] || '');
+      buffer = Buffer.from(ax.data || []);
+    }
+    console.log('[SONG] hashu direct status=', status, 'size=', buffer.length);
+    if (status === 200 && buffer.length >= 5000) {
+      const head = buffer.slice(0, 20).toString('utf8');
+      if (!head.startsWith('<') && !head.startsWith('{') && !head.includes('Not Found')) {
+        return { buffer, contentType };
+      }
+    }
+  } catch (e) {
+    console.log('[SONG] hashu direct fail:', e.message);
+  }
+  return null;
+}
+
+/** Fallback: loader.to (works when Hashu CDN is dead) */
+async function tryLoaderTo(youtubeUrl) {
+  console.log('[SONG] loader.to fallback...');
+  const start = await axios.get(LOADER_START, {
+    params: { format: 'mp3', url: youtubeUrl },
+    timeout: 30000,
+    validateStatus: () => true,
+    headers: { 'User-Agent': 'Mozilla/5.0' },
+  });
+
+  if (!start.data || !start.data.progress_url) {
+    throw new Error('loader.to start failed');
+  }
+
+  const progressUrl = start.data.progress_url;
+  let downloadUrl = null;
+  let title = start.data.title || start.data.info?.title || null;
+
+  for (let i = 0; i < 40; i++) {
+    await sleep(2000);
+    const p = await axios.get(progressUrl, {
+      timeout: 20000,
+      validateStatus: () => true,
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    const data = p.data || {};
+    const prog = Number(data.progress || 0);
+    console.log('[SONG] loader progress=', prog, 'success=', data.success);
+
+    if (data.success == 1 || prog >= 1000) {
+      downloadUrl = data.download_url || data.url || null;
+      title = data.title || data.info?.title || title;
+      break;
+    }
+    if (data.success == 0 && prog < 0) {
+      throw new Error('loader.to convert failed');
+    }
+  }
+
+  if (!downloadUrl) throw new Error('loader.to timeout — no download_url');
+
+  const { status, contentType, buffer } = await downloadBuffer(downloadUrl);
+  console.log('[SONG] loader file status=', status, 'size=', buffer.length, 'ct=', contentType);
+
+  if (status !== 200 || buffer.length < 5000) {
+    throw new Error(`loader.to file fail HTTP ${status} size ${buffer.length}`);
+  }
+
+  return { buffer, contentType, title };
 }
 
 async function downloadAndSend({ sock, msg, from, item }) {
@@ -134,75 +202,49 @@ async function downloadAndSend({ sock, msg, from, item }) {
     const ytUrl = item.url;
 
     await sock
-      .sendMessage(from, {
-        text: '🔗 *Download link ලබාගනිමින්...*',
-        edit: loading.key,
-      })
+      .sendMessage(from, { text: '🔗 *Link ලබාගනිමින්...*', edit: loading.key })
       .catch(() => {});
 
-    // 1) ytdl API
-    const info = await getYtdlInfo(ytUrl);
-    const title = info.title || item.title || 'Song';
-    const duration =
+    let meta = {};
+    try {
+      meta = await getYtdlInfo(ytUrl);
+    } catch (e) {
+      console.log('[SONG] ytdl meta fail:', e.message);
+    }
+
+    let title = meta.title || item.title || 'Song';
+    let duration =
       item.duration && item.duration !== 'N/A'
         ? item.duration
-        : formatDuration(info.duration);
+        : formatDuration(meta.duration);
     const author = item.author || 'YouTube';
     const thumb = item.thumbnail || null;
-    const quality = info.quality || 'mp3';
+    const quality = meta.quality || 'mp3';
 
     await sock
-      .sendMessage(from, {
-        text: '⬇️ *MP3 download කරමින්...*',
-        edit: loading.key,
-      })
+      .sendMessage(from, { text: '⬇️ *MP3 download කරමින්...*', edit: loading.key })
       .catch(() => {});
 
-    // 2) Download direct_link
-    let { status, contentType, buffer } = await downloadBuffer(info.direct_link);
+    // 1) Try Hashu direct_link
+    let audio = await tryHashuDirect(meta.direct_link);
 
-    // axios fallback if native empty/404
-    if (status !== 200 || !buffer.length || buffer.length < 2000) {
-      console.log('[SONG] native fail status=', status, 'size=', buffer.length, '— axios retry');
-      const ax = await axios.get(info.direct_link, {
-        responseType: 'arraybuffer',
-        timeout: 180000,
-        maxRedirects: 5,
-        validateStatus: () => true,
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          Accept: 'audio/mpeg,audio/*,*/*',
-          Referer: 'https://www.youtube.com/',
-        },
-        decompress: false,
-      });
-      status = ax.status;
-      contentType = String(ax.headers['content-type'] || '');
-      buffer = Buffer.from(ax.data || []);
+    // 2) Fallback loader.to
+    if (!audio) {
+      await sock
+        .sendMessage(from, {
+          text: '🔄 *CDN fail — alternate source...*',
+          edit: loading.key,
+        })
+        .catch(() => {});
+      const fb = await tryLoaderTo(ytUrl);
+      audio = { buffer: fb.buffer, contentType: fb.contentType };
+      if (fb.title) title = fb.title;
     }
 
-    console.log('[SONG] audio status=', status, 'ct=', contentType, 'size=', buffer.length);
-
-    if (status !== 200 || buffer.length < 2000) {
-      let errDetail = `HTTP ${status}, ${buffer.length} bytes`;
-      if (buffer.length > 0 && buffer.length < 500) {
-        errDetail += ' · ' + buffer.toString('utf8').slice(0, 120);
-      }
-      throw new Error(
-        'MP3 download fail (' +
-          errDetail +
-          '). Link expired or CDN blocked. Try another result.'
-      );
-    }
-
-    // reject HTML/JSON bodies
-    const head = buffer.slice(0, 40).toString('utf8').trim();
-    if (head.startsWith('<') || head.startsWith('{')) {
-      throw new Error('Download returned HTML/JSON instead of audio');
-    }
-
+    const buffer = audio.buffer;
+    const contentType = audio.contentType || 'audio/mpeg';
     const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
+
     if (buffer.length > MAX_WA_BYTES) {
       return sock.sendMessage(from, {
         text: `❌ File ලොකුයි (*${sizeMB} MB*).`,
@@ -210,13 +252,10 @@ async function downloadAndSend({ sock, msg, from, item }) {
       });
     }
 
-    // Detect mimetype
     let mimetype = 'audio/mpeg';
     if (buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) mimetype = 'audio/mpeg';
-    else if (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) mimetype = 'audio/mpeg';
-    else if (contentType.includes('mp4') || contentType.includes('m4a')) mimetype = 'audio/mp4';
+    else if (contentType.includes('mp4')) mimetype = 'audio/mp4';
     else if (contentType.includes('webm')) mimetype = 'audio/webm';
-    else if (contentType.includes('ogg')) mimetype = 'audio/ogg';
 
     const caption = `
 ╭───「 🎵 *SONG* 」───╮
@@ -282,7 +321,6 @@ module.exports = {
   async execute({ sock, msg, from, args }) {
     const prefix = config.prefix || '.';
 
-    // .song 1
     if (args.length === 1 && /^\d+$/.test(args[0])) {
       const idx = parseInt(args[0], 10) - 1;
       const p = pending.get(from);
@@ -343,7 +381,6 @@ module.exports = {
       });
     }
 
-    // Search
     const loading = await sock.sendMessage(
       from,
       { text: '🔍 *Song හොයමින්...*' },
