@@ -1,111 +1,62 @@
 const axios = require('axios');
 const config = require('../../config');
-const API_KEY = 'Sasa_Dev_Api_479c9ed9917d15f5cacdb37b6df3fb4b6f4d7b34';
-const API_BASE = 'https://sasa-dev-api.xyz/api/tiktok';
+
+const API_URL = 'https://whiteshadow-x-api.onrender.com/api/download/tiktok';
+const API_TOKEN = 'CkExxE';
 const MAX_WA_BYTES = 60 * 1024 * 1024;
 
-function isTtUrl(text) {
-  return /tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com/i.test(text);
-}
-
-function extractUrl(text) {
+function extractTikTokUrl(text) {
   const m = String(text || '').match(
-    /https?:\/\/(?:(?:www|vm|vt|m)\.)?tiktok\.com\/[^\s]*/i
+    /https?:\/\/(?:(?:vm|vt|www)\.)?tiktok\.com\/[^\s]+/i
   );
   return m ? m[0].replace(/[)\]>,.]+$/, '') : null;
 }
 
-function extractVideoId(url) {
-  if (!url) return null;
-  // /video/1234567890
-  let m = String(url).match(/\/video\/(\d{10,})/);
-  if (m) return m[1];
-  // sometimes id in query
-  m = String(url).match(/[?&](?:id|video_id)=(\d{10,})/i);
-  if (m) return m[1];
-  return null;
+function formatSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(2) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+  return n + ' B';
 }
 
-async function resolveShortUrl(url) {
-  try {
-    if (!/vt\.tiktok\.com|vm\.tiktok\.com/i.test(url)) return url;
-    const res = await axios.get(url, {
-      maxRedirects: 5,
-      timeout: 15000,
-      validateStatus: () => true,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      },
-    });
-    const finalUrl =
-      res.request?.res?.responseUrl ||
-      res.request?.responseURL ||
-      (res.headers && res.headers.location) ||
-      url;
-    return finalUrl || url;
-  } catch (_) {
-    return url;
+function pickVideoUrl(data) {
+  // Prefer no-watermark, then HD, then watermarked
+  const order = ['play', 'hdplay', 'wmplay', 'video', 'nwm_video_url', 'video_url'];
+  for (const k of order) {
+    if (typeof data[k] === 'string' && /^https?:\/\//i.test(data[k])) return { url: data[k], quality: k };
   }
-}
-
-function pickBestVideo(result, wantedId) {
-  const videos = result?.videos || result?.data || [];
-  if (!Array.isArray(videos) || !videos.length) return null;
-
-  if (wantedId) {
-    const match = videos.find((v) => String(v.id) === String(wantedId));
-    if (match) return match;
-  }
-  return videos[0];
-}
-
-function pickDownloadLink(video) {
-  if (!video || typeof video !== 'object') return null;
-  // Prefer no-watermark if available and different
-  const candidates = [
-    video.video,
-    video.no_watermark,
-    video.nwm,
-    video.download,
-    video.play,
-    video.playAddr,
-    video.wmplay,
-    video.watermarked,
-    video.url,
-  ];
-  for (const c of candidates) {
-    if (typeof c === 'string' && /^https?:\/\//i.test(c)) return c;
+  if (Array.isArray(data.links)) {
+    for (const l of data.links) {
+      if (typeof l === 'string' && /^https?:\/\//i.test(l)) return { url: l, quality: 'auto' };
+      if (l?.url) return { url: l.url, quality: l.quality || 'auto' };
+    }
   }
   return null;
 }
 
 module.exports = {
   name: 'tt',
-  aliases: ['tiktok', 'ttdl', 'tiktokdl'],
-  description: 'Download TikTok video (no watermark when available)',
+  aliases: ['tiktok', 'tiktokdl', 'ttdl'],
+  description: 'Download TikTok video (no watermark)',
   category: 'download',
 
   async execute({ sock, msg, from, args }) {
     const prefix = config.prefix || '.';
+    const raw = args.join(' ').trim();
+    const url = extractTikTokUrl(raw) || (raw.includes('tiktok') ? raw : null);
 
-    if (!args.length) {
+    if (!url) {
       return sock.sendMessage(
         from,
         {
-          text: `╭───「 🎵 *TIKTOK DOWNLOAD* 」───╮
+          text: `╭───「 🎵 *TIKTOK DL* 」───╮
 │
 │  ❌ *Usage:*
-│  ${prefix}tt <tiktok video link>
+│  ${prefix}tt <tiktok url>
 │
 │  📌 *Example:*
+│  ${prefix}tt https://vt.tiktok.com/xxxxx/
 │  ${prefix}tt https://www.tiktok.com/@user/video/123
-│  ${prefix}tt https://vt.tiktok.com/xxxxx
-│
-│  ✅ Supports:
-│  • TikTok videos
-│  • Short links (vt / vm)
-│  • No-watermark when available
 │
 ╰──────────────────────╯`,
         },
@@ -113,34 +64,15 @@ module.exports = {
       );
     }
 
-    const raw = args.join(' ').trim();
-    let url = extractUrl(raw) || (isTtUrl(raw) ? raw : null);
-
-    if (!url) {
-      return sock.sendMessage(
-        from,
-        {
-          text: `❌ Valid TikTok link එකක් නොවේ.\n\n💡 *Example:*\n${prefix}tt https://vt.tiktok.com/xxxxx`,
-        },
-        { quoted: msg }
-      );
-    }
-
     const loading = await sock.sendMessage(
       from,
-      { text: '📥 *TikTok video ලබාගනිමින්...*' },
+      { text: '📥 *TikTok download වෙමින්...*' },
       { quoted: msg }
     );
 
     try {
-      // Resolve short links so we can match video id
-      url = await resolveShortUrl(url);
-      const videoId = extractVideoId(url);
-
-      // This API uses search endpoint; pass URL as q/text to get video + direct links
-      const apiUrl = `${API_BASE}?apikey=${API_KEY}&q=${encodeURIComponent(url)}`;
-
-      const apiRes = await axios.get(apiUrl, {
+      const apiRes = await axios.get(API_URL, {
+        params: { url, apitoken: API_TOKEN },
         timeout: 90000,
         validateStatus: () => true,
         headers: {
@@ -149,97 +81,84 @@ module.exports = {
         },
       });
 
-      const data = apiRes.data;
-
-      if (apiRes.status !== 200 || !data) {
-        return sock.sendMessage(from, {
-          text: '❌ API එකෙන් response ආවේ නැහැ. ටිකකින් නැවත try කරන්න.',
-          edit: loading.key,
-        });
+      if (apiRes.status !== 200 || !apiRes.data) {
+        throw new Error(`API HTTP ${apiRes.status}`);
       }
 
-      if (data.status === false || data.success === false) {
-        const reason = data.error || data.msg || data.message || 'Video හමු නොවීය';
-        return sock.sendMessage(from, {
-          text: `❌ Download fail වුණා.\n\n\`${reason}\`\n\n💡 Public TikTok link එකක් දීලා try කරන්න.`,
-          edit: loading.key,
-        });
+      const body = apiRes.data;
+      if (body.success === false || body.status === false) {
+        throw new Error(body.message || body.msg || body.error || 'API failed');
       }
 
-      const result = data.result || data.data || data;
-      const video = pickBestVideo(result, videoId);
+      // Whiteshadow shape: result.data  OR result  OR data
+      const result = body.result || body.data || body;
+      const data =
+        result?.data && typeof result.data === 'object'
+          ? result.data
+          : result;
 
-      if (!video) {
-        return sock.sendMessage(from, {
-          text: '❌ Video හමු නොවීය.\n💡 Link එක හරිද බලලා ආයෙත් try කරන්න.',
-          edit: loading.key,
-        });
+      if (!data || typeof data !== 'object') {
+        throw new Error('Invalid API response');
       }
 
-      const dlUrl = pickDownloadLink(video);
-      if (!dlUrl) {
-        console.error('TT API no download link:', JSON.stringify(video).slice(0, 600));
-        return sock.sendMessage(from, {
-          text: '❌ Download link එක හොයාගන්න බැරි වුණා.',
-          edit: loading.key,
-        });
+      const picked = pickVideoUrl(data);
+      if (!picked) {
+        throw new Error('Video link හොයාගන්න බැරි වුණා');
       }
 
       const title =
-        video.title ||
-        video.desc ||
-        video.description ||
+        data.title ||
+        data.desc ||
+        (Array.isArray(data.content_desc) ? data.content_desc.join(' ') : '') ||
         'TikTok Video';
       const author =
-        video.author?.nickname ||
-        video.author?.username ||
-        video.author ||
+        data.author?.nickname ||
+        data.author?.unique_id ||
+        data.author ||
+        data.nickname ||
         'Unknown';
-      const cover = video.cover || video.thumbnail || video.thumb || null;
-      const duration = video.duration ? `${video.duration}s` : 'N/A';
+      const cover = data.cover || data.origin_cover || data.ai_dynamic_cover || null;
+      const duration = data.duration || null;
+      const sizeHint = data.size || data.hd_size || data.wm_size || null;
 
-      await sock.sendMessage(from, {
-        text: '⬇️ *Video download වෙමින්...*',
-        edit: loading.key,
-      }).catch(() => {});
+      await sock
+        .sendMessage(from, {
+          text: '⬇️ *Video ලබාගනිමින්...*',
+          edit: loading.key,
+        })
+        .catch(() => {});
 
-      const mediaRes = await axios.get(dlUrl, {
+      const mediaRes = await axios.get(picked.url, {
         responseType: 'arraybuffer',
         timeout: 180000,
-        maxContentLength: MAX_WA_BYTES + 5 * 1024 * 1024,
-        maxBodyLength: MAX_WA_BYTES + 5 * 1024 * 1024,
+        maxContentLength: MAX_WA_BYTES + 10 * 1024 * 1024,
+        maxBodyLength: MAX_WA_BYTES + 10 * 1024 * 1024,
+        validateStatus: () => true,
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           Referer: 'https://www.tiktok.com/',
         },
-        validateStatus: () => true,
       });
 
-      const contentType = String(mediaRes.headers?.['content-type'] || '').toLowerCase();
+      const ct = String(mediaRes.headers?.['content-type'] || '').toLowerCase();
       if (
         mediaRes.status !== 200 ||
-        contentType.includes('text/html') ||
-        contentType.includes('application/json')
+        ct.includes('text/html') ||
+        ct.includes('application/json')
       ) {
-        return sock.sendMessage(from, {
-          text: '❌ Video file එක ලබාගන්න බැරි වුණා (link expired / blocked).\n💡 ආයෙත් try කරන්න.',
-          edit: loading.key,
-        });
+        throw new Error('Video file ලබාගන්න බැරි වුණා (link expired)');
       }
 
       const buffer = Buffer.from(mediaRes.data);
       if (!buffer.length || buffer.length < 5000) {
-        return sock.sendMessage(from, {
-          text: '❌ Video file එක empty / invalid.',
-          edit: loading.key,
-        });
+        throw new Error('Video empty / invalid');
       }
 
       const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
       if (buffer.length > MAX_WA_BYTES) {
         return sock.sendMessage(from, {
-          text: `❌ File එක ගොඩක් ලොකුයි (*${sizeMB} MB*).\nWhatsApp limit එක ~60MB.`,
+          text: `❌ File ලොකුයි (*${sizeMB} MB*). WhatsApp limit ~60MB.`,
           edit: loading.key,
         });
       }
@@ -249,10 +168,9 @@ module.exports = {
 │
 │  📌 *Title*    ›  ${String(title).slice(0, 70)}
 │  👤 *Author*   ›  ${String(author).slice(0, 40)}
-│  ⏱ *Duration* ›  ${duration}
-│  📦 *Size*     ›  ${sizeMB} MB
-│  🔗 *Source*   ›  TikTok
-│  ✅ *Status*   ›  Done
+│  ⏱ *Duration* ›  ${duration ? duration + 's' : 'N/A'}
+│  🎬 *Quality*  ›  ${picked.quality}
+│  📦 *Size*     ›  ${sizeMB} MB${sizeHint ? ' (~' + formatSize(sizeHint) + ')' : ''}
 │
 ╰──────────────────────╯`.trim();
 
@@ -269,8 +187,8 @@ module.exports = {
           },
           { quoted: msg }
         );
-      } catch (sendErr) {
-        console.error('TT video send failed, document fallback:', sendErr.message);
+      } catch (e1) {
+        console.error('TT video send fail:', e1.message);
         await sock.sendMessage(
           from,
           {
@@ -282,12 +200,35 @@ module.exports = {
           { quoted: msg }
         );
       }
+
+      // Optional: send music if available and small
+      if (data.music && typeof data.music === 'string' && /^https?:\/\//i.test(data.music)) {
+        try {
+          const musicRes = await axios.get(data.music, {
+            responseType: 'arraybuffer',
+            timeout: 60000,
+            maxContentLength: 15 * 1024 * 1024,
+            validateStatus: () => true,
+            headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://www.tiktok.com/' },
+          });
+          const mb = Buffer.from(musicRes.data || []);
+          if (musicRes.status === 200 && mb.length > 2000 && mb.length < 15 * 1024 * 1024) {
+            await sock.sendMessage(
+              from,
+              { audio: mb, mimetype: 'audio/mpeg', ptt: false, fileName: 'tiktok-music.mp3' },
+              { quoted: msg }
+            ).catch(() => {});
+          }
+        } catch (_) {}
+      }
     } catch (err) {
-      console.error('TT Download Error:', err.message);
-      await sock.sendMessage(from, {
-        text: `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\`\n\n💡 ආයෙත් \`${prefix}tt <link>\` කරලා try කරන්න.`,
-        edit: loading.key,
-      }).catch(() => {});
+      console.error('TT Error:', err.message);
+      await sock
+        .sendMessage(from, {
+          text: `❌ TikTok download fail.\n\n\`${err.message}\``,
+          edit: loading.key,
+        })
+        .catch(() => {});
     }
   },
 };
