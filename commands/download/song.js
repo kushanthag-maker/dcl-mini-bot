@@ -1,4 +1,10 @@
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 const config = require('../../config');
 
 const API_KEY = 'hashu_f9f45a96c8d49e4f05d1552e45eb2166';
@@ -8,7 +14,6 @@ const FILE_API = 'https://hashu-apis-production.up.railway.app/api/song/file';
 const MAX_WA_BYTES = 60 * 1024 * 1024;
 const PENDING_TTL_MS = 2 * 60 * 1000;
 
-// from -> { results, timeout }
 const pending = new Map();
 
 function sanitizeFileName(name) {
@@ -26,11 +31,112 @@ function formatViews(n) {
   return String(v);
 }
 
+/** Detect real audio container from magic bytes */
+function detectAudio(buffer) {
+  if (!buffer || buffer.length < 12) return null;
+  // ID3 / MP3
+  if (buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) {
+    return { mimetype: 'audio/mpeg', ext: 'mp3' };
+  }
+  if (buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) {
+    return { mimetype: 'audio/mpeg', ext: 'mp3' };
+  }
+  // EBML / WebM
+  if (buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3) {
+    return { mimetype: 'audio/webm', ext: 'webm' };
+  }
+  // Ogg
+  if (buffer[0] === 0x4f && buffer[1] === 0x67 && buffer[2] === 0x67 && buffer[3] === 0x53) {
+    return { mimetype: 'audio/ogg; codecs=opus', ext: 'ogg' };
+  }
+  // ftyp (m4a/mp4)
+  if (buffer.toString('ascii', 4, 8) === 'ftyp') {
+    return { mimetype: 'audio/mp4', ext: 'm4a' };
+  }
+  // RIFF WAV
+  if (buffer.toString('ascii', 0, 4) === 'RIFF') {
+    return { mimetype: 'audio/wav', ext: 'wav' };
+  }
+  return null;
+}
+
+function isJsonBuffer(buffer) {
+  if (!buffer || buffer.length < 2) return false;
+  const s = buffer.slice(0, 80).toString('utf8').trim();
+  return s.startsWith('{') || s.startsWith('[');
+}
+
+/** Convert any audio buffer → MP3 via ffmpeg (WhatsApp-friendly) */
+async function toMp3(inputBuffer, inputExt) {
+  const tmp = os.tmpdir();
+  const inFile = path.join(tmp, `song_in_${Date.now()}.${inputExt || 'webm'}`);
+  const outFile = path.join(tmp, `song_out_${Date.now()}.mp3`);
+  try {
+    fs.writeFileSync(inFile, inputBuffer);
+    await execFileAsync(
+      'ffmpeg',
+      ['-y', '-i', inFile, '-vn', '-acodec', 'libmp3lame', '-q:a', '4', outFile],
+      { timeout: 120000 }
+    );
+    const out = fs.readFileSync(outFile);
+    return out;
+  } finally {
+    try { fs.unlinkSync(inFile); } catch (_) {}
+    try { fs.unlinkSync(outFile); } catch (_) {}
+  }
+}
+
+/** Stream download from file API into Buffer */
+async function streamSongFile(youtubeUrl) {
+  const res = await axios.get(FILE_API, {
+    params: { apiKey: API_KEY, text: youtubeUrl },
+    responseType: 'arraybuffer',
+    timeout: 180000,
+    maxContentLength: MAX_WA_BYTES + 10 * 1024 * 1024,
+    maxBodyLength: MAX_WA_BYTES + 10 * 1024 * 1024,
+    validateStatus: () => true,
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      Accept: '*/*',
+    },
+    // follow redirects
+    maxRedirects: 5,
+  });
+
+  const buffer = Buffer.from(res.data || []);
+  const ct = String(res.headers?.['content-type'] || '').toLowerCase();
+
+  if (res.status !== 200) {
+    let msg = `HTTP ${res.status}`;
+    if (isJsonBuffer(buffer)) {
+      try {
+        msg = JSON.parse(buffer.toString()).message || msg;
+      } catch (_) {}
+    }
+    throw new Error(msg);
+  }
+
+  if (isJsonBuffer(buffer) || ct.includes('application/json')) {
+    let msg = 'API returned JSON error';
+    try {
+      msg = JSON.parse(buffer.toString()).message || msg;
+    } catch (_) {}
+    throw new Error(msg);
+  }
+
+  if (buffer.length < 5000) {
+    throw new Error(`File too small (${buffer.length} bytes)`);
+  }
+
+  return { buffer, contentType: ct };
+}
+
 async function fetchSongInfo(youtubeUrl) {
   try {
     const res = await axios.get(DL_API, {
       params: { apiKey: API_KEY, text: youtubeUrl },
-      timeout: 90000,
+      timeout: 60000,
       validateStatus: () => true,
     });
     if (res.status === 200 && res.data && res.data.success !== false) {
@@ -43,7 +149,7 @@ async function fetchSongInfo(youtubeUrl) {
 async function downloadAndSend({ sock, msg, from, item }) {
   const loading = await sock.sendMessage(
     from,
-    { text: '📥 *Song download වෙමින්...*' },
+    { text: '📥 *Song download වෙමින්...*\n⏳ ටිකක් ඉන්න' },
     { quoted: msg }
   );
 
@@ -54,69 +160,71 @@ async function downloadAndSend({ sock, msg, from, item }) {
     const duration = info.duration || item.duration || 'N/A';
     const author = info.author || info.channel || item.author || 'Unknown';
     const thumb = info.thumbnail || item.thumbnail || null;
-    const quality = info.quality || info.audioQuality || 'Audio';
 
-    // Prefer file stream API (works reliably)
-    const fileRes = await axios.get(FILE_API, {
-      params: { apiKey: API_KEY, text: ytUrl },
-      responseType: 'arraybuffer',
-      timeout: 180000,
-      maxContentLength: MAX_WA_BYTES + 5 * 1024 * 1024,
-      maxBodyLength: MAX_WA_BYTES + 5 * 1024 * 1024,
-      validateStatus: () => true,
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      },
-    });
-
-    const ct = String(fileRes.headers?.['content-type'] || '').toLowerCase();
-    if (
-      fileRes.status !== 200 ||
-      ct.includes('application/json') ||
-      ct.includes('text/html')
-    ) {
-      let errMsg = 'Download fail';
-      try {
-        errMsg = JSON.parse(Buffer.from(fileRes.data).toString()).message || errMsg;
-      } catch (_) {}
-      return sock.sendMessage(from, {
-        text: `❌ Song download වුණේ නැහැ.\n\n\`${errMsg}\`\n💡 වෙන result number එකක් try කරන්න.`,
+    await sock
+      .sendMessage(from, {
+        text: '⬇️ *Audio stream ලබාගනිමින්...*',
         edit: loading.key,
-      });
-    }
+      })
+      .catch(() => {});
 
-    const buffer = Buffer.from(fileRes.data);
-    if (!buffer.length || buffer.length < 2000) {
-      return sock.sendMessage(from, {
-        text: '❌ Audio file එක empty / invalid.',
-        edit: loading.key,
-      });
-    }
+    // 1) Stream file API → buffer
+    const { buffer: rawBuf, contentType } = await streamSongFile(ytUrl);
+    let detected = detectAudio(rawBuf);
 
-    const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
-    if (buffer.length > MAX_WA_BYTES) {
-      return sock.sendMessage(from, {
-        text: `❌ File එක ගොඩක් ලොකුයි (*${sizeMB} MB*). WhatsApp limit ~60MB.`,
-        edit: loading.key,
-      });
-    }
-
-    // webm / mp3 / m4a
+    let audioBuffer = rawBuf;
     let mimetype = 'audio/mpeg';
     let ext = 'mp3';
-    if (ct.includes('webm')) {
-      mimetype = 'audio/webm';
-      ext = 'webm';
-    } else if (ct.includes('ogg') || ct.includes('opus')) {
-      mimetype = 'audio/ogg; codecs=opus';
-      ext = 'ogg';
-    } else if (ct.includes('mp4') || ct.includes('m4a')) {
-      mimetype = 'audio/mp4';
-      ext = 'm4a';
-    } else if (ct.includes('mpeg') || ct.includes('mp3')) {
-      mimetype = 'audio/mpeg';
-      ext = 'mp3';
+
+    // 2) Convert webm/ogg to mp3 for WhatsApp compatibility
+    if (detected && (detected.ext === 'webm' || detected.ext === 'ogg' || detected.ext === 'wav')) {
+      await sock
+        .sendMessage(from, {
+          text: '🔄 *MP3 බවට convert කරමින්...*',
+          edit: loading.key,
+        })
+        .catch(() => {});
+      try {
+        audioBuffer = await toMp3(rawBuf, detected.ext);
+        mimetype = 'audio/mpeg';
+        ext = 'mp3';
+        detected = detectAudio(audioBuffer) || { mimetype, ext };
+      } catch (convErr) {
+        console.error('ffmpeg convert failed:', convErr.message);
+        // fallback: send original
+        mimetype = detected.mimetype;
+        ext = detected.ext;
+        audioBuffer = rawBuf;
+      }
+    } else if (detected) {
+      mimetype = detected.mimetype;
+      ext = detected.ext;
+    } else {
+      // Unknown — try force convert to mp3
+      try {
+        audioBuffer = await toMp3(rawBuf, 'webm');
+        mimetype = 'audio/mpeg';
+        ext = 'mp3';
+      } catch (_) {
+        mimetype = contentType.includes('webm') ? 'audio/webm' : 'audio/mpeg';
+        ext = contentType.includes('webm') ? 'webm' : 'mp3';
+        audioBuffer = rawBuf;
+      }
+    }
+
+    if (!audioBuffer || audioBuffer.length < 3000) {
+      return sock.sendMessage(from, {
+        text: '❌ Audio buffer empty / invalid after download.',
+        edit: loading.key,
+      });
+    }
+
+    const sizeMB = (audioBuffer.length / 1024 / 1024).toFixed(2);
+    if (audioBuffer.length > MAX_WA_BYTES) {
+      return sock.sendMessage(from, {
+        text: `❌ File ගොඩක් ලොකුයි (*${sizeMB} MB*).`,
+        edit: loading.key,
+      });
     }
 
     const caption = `
@@ -125,23 +233,19 @@ async function downloadAndSend({ sock, msg, from, item }) {
 │  📌 *Title*    ›  ${String(title).slice(0, 60)}
 │  👤 *Artist*   ›  ${String(author).slice(0, 40)}
 │  ⏱ *Duration* ›  ${duration}
-│  🎧 *Quality*  ›  ${quality}
 │  📦 *Size*     ›  ${sizeMB} MB
+│  🎧 *Format*   ›  ${ext.toUpperCase()}
 │  🔗 *Source*   ›  YouTube
 │
 ╰──────────────────────╯`.trim();
 
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
-    // Image + caption first
+    // Thumbnail + caption
     if (thumb && /^https?:\/\//i.test(thumb)) {
       try {
-        await sock.sendMessage(
-          from,
-          { image: { url: thumb }, caption },
-          { quoted: msg }
-        );
-      } catch (e) {
+        await sock.sendMessage(from, { image: { url: thumb }, caption }, { quoted: msg });
+      } catch (_) {
         await sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {});
       }
     } else {
@@ -150,37 +254,44 @@ async function downloadAndSend({ sock, msg, from, item }) {
 
     const fileName = `${sanitizeFileName(title)}.${ext}`;
 
-    // Send as audio, fallback document
+    // Baileys: send as audio buffer (streamed already into memory)
     try {
       await sock.sendMessage(
         from,
         {
-          audio: buffer,
-          mimetype,
-          fileName,
+          audio: audioBuffer,
+          mimetype: mimetype,
+          fileName: fileName,
           ptt: false,
         },
         { quoted: msg }
       );
-    } catch (e) {
-      console.error('Song audio send fail, document:', e.message);
-      await sock.sendMessage(
-        from,
-        {
-          document: buffer,
-          mimetype,
-          fileName,
-          caption: '📁 *Audio format fail — document*',
-        },
-        { quoted: msg }
-      );
+    } catch (e1) {
+      console.error('audio send failed:', e1.message);
+      // Document fallback (always works on WA)
+      try {
+        await sock.sendMessage(
+          from,
+          {
+            document: audioBuffer,
+            mimetype: mimetype,
+            fileName: fileName,
+            caption: '📁 Audio',
+          },
+          { quoted: msg }
+        );
+      } catch (e2) {
+        throw e2;
+      }
     }
   } catch (err) {
     console.error('Song Download Error:', err.message);
-    await sock.sendMessage(from, {
-      text: `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\``,
-      edit: loading.key,
-    }).catch(() => {});
+    await sock
+      .sendMessage(from, {
+        text: `❌ Song download fail.\n\n\`${err.message}\`\n\n💡 වෙන number එකක් / song එකක් try කරන්න.`,
+        edit: loading.key,
+      })
+      .catch(() => {});
   }
 }
 
@@ -193,23 +304,20 @@ module.exports = {
   async execute({ sock, msg, from, args }) {
     const prefix = config.prefix || '.';
 
-    // ===== Select: .song 1 =====
     if (args.length === 1 && /^\d+$/.test(args[0])) {
       const idx = parseInt(args[0], 10) - 1;
       const p = pending.get(from);
       if (!p || !p.results?.length) {
         return sock.sendMessage(
           from,
-          {
-            text: `❌ Active search එකක් නැහැ.\n💡 \`${prefix}song <name>\` කරලා search කරන්න.`,
-          },
+          { text: `❌ Active search නැහැ.\n💡 \`${prefix}song <name>\`` },
           { quoted: msg }
         );
       }
       if (idx < 0 || idx >= p.results.length) {
         return sock.sendMessage(
           from,
-          { text: `❌ Number එක වැරදියි. *1*–*${p.results.length}* තෝරන්න.` },
+          { text: `❌ *1*–*${p.results.length}* තෝරන්න.` },
           { quoted: msg }
         );
       }
@@ -224,12 +332,11 @@ module.exports = {
         {
           text: `╭───「 🎵 *SONG* 」───╮
 │
-│  ❌ *Usage:*
-│  ${prefix}song <song name>
+│  ${prefix}song <name>
 │  ${prefix}song <youtube url>
-│  ${prefix}song <number>   ← after search
+│  ${prefix}song <number>
 │
-│  📌 *Example:*
+│  Example:
 │  ${prefix}song Lokayen yamu
 │  ${prefix}song 1
 │
@@ -242,13 +349,18 @@ module.exports = {
     const query = args.join(' ').trim();
     const isUrl = /youtube\.com|youtu\.be/i.test(query);
 
-    // Direct URL → download
     if (isUrl) {
       return downloadAndSend({
         sock,
         msg,
         from,
-        item: { url: query, title: query, author: 'YouTube', duration: 'N/A', thumbnail: null },
+        item: {
+          url: query,
+          title: 'YouTube Song',
+          author: 'YouTube',
+          duration: 'N/A',
+          thumbnail: null,
+        },
       });
     }
 
@@ -266,9 +378,8 @@ module.exports = {
       });
 
       if (res.status !== 200 || !res.data || res.data.success === false) {
-        const reason = res.data?.message || 'Search fail';
         return sock.sendMessage(from, {
-          text: `❌ Search fail.\n\n\`${reason}\``,
+          text: `❌ Search fail.\n\`${res.data?.message || 'error'}\``,
           edit: loading.key,
         });
       }
@@ -304,23 +415,22 @@ module.exports = {
       const timeout = setTimeout(() => pending.delete(from), PENDING_TTL_MS);
       pending.set(from, { results: cleaned, timeout });
 
-      let list = `╭───「 🎵 *SONG SEARCH* 」───╮\n│\n│  🔎 *Query* ›  ${query.slice(0, 40)}\n│\n`;
+      let list = `╭───「 🎵 *SONG SEARCH* 」───╮\n│\n│  🔎 *${query.slice(0, 40)}*\n│\n`;
       cleaned.forEach((item) => {
         list +=
           `│  *${item.index}.* ${String(item.title).slice(0, 42)}\n` +
           `│      ⏱ ${item.duration} · 👁 ${formatViews(item.views)}\n` +
           `│      👤 ${String(item.author).slice(0, 28)}\n│\n`;
       });
-      list += `│  👇 *${prefix}song <number>*\n│  ⏳ විනාඩි 2ක් ඇතුළත\n│\n╰──────────────────────╯`;
+      list += `│  👇 *${prefix}song <number>*\n│  ⏳ 2 min\n╰──────────────────────╯`;
 
       await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
-      const firstThumb = cleaned[0].thumbnail;
-      if (firstThumb) {
+      if (cleaned[0].thumbnail) {
         try {
           await sock.sendMessage(
             from,
-            { image: { url: firstThumb }, caption: list },
+            { image: { url: cleaned[0].thumbnail }, caption: list },
             { quoted: msg }
           );
           return;
@@ -329,10 +439,12 @@ module.exports = {
       await sock.sendMessage(from, { text: list }, { quoted: msg });
     } catch (err) {
       console.error('Song Search Error:', err.message);
-      await sock.sendMessage(from, {
-        text: `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\``,
-        edit: loading.key,
-      }).catch(() => {});
+      await sock
+        .sendMessage(from, {
+          text: `❌ \`${err.message}\``,
+          edit: loading.key,
+        })
+        .catch(() => {});
     }
   },
 };
