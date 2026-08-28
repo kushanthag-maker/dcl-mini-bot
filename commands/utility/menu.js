@@ -1,10 +1,11 @@
 const config = require('../../config');
 const { getSettings } = require('../../lib/botSettings');
+const { findSessionIdBySock } = require('../../lib/sessionManager');
 const moment = require('moment-timezone');
 const { getAllCommands } = require('../../lib/commandHandler');
 
-function getMenuLogo() {
-  try { return getSettings().logo || 'https://files.catbox.moe/4dvou4.png'; } catch { return 'https://files.catbox.moe/4dvou4.png'; }
+function getMenuLogo(sessionId) {
+  try { return getSettings(sessionId).logo || 'https://files.catbox.moe/4dvou4.png'; } catch { return 'https://files.catbox.moe/4dvou4.png'; }
 }
 
 const CATEGORY_META = {
@@ -70,10 +71,11 @@ module.exports = {
   aliases: ['help', 'list', 'm', 'commands'],
   description: 'Show all available commands with banner',
   category: 'utility',
-  async execute({ sock, msg, from }) {
+  async execute({ sock, msg, from, sessionId }) {
     try {
       const prefix = config.prefix || '.';
-      const settings = getSettings();
+      const sid = sessionId || findSessionIdBySock(sock);
+      const settings = getSettings(sid);
       const botName = settings.botName || config.botName || 'Zayra';
       const runtime = formatUptime(process.uptime());
       const now = moment().tz(config.timezone || 'Asia/Colombo').format('YYYY-MM-DD  HH:mm');
@@ -116,7 +118,7 @@ module.exports = {
       await sock.sendMessage(
         from,
         {
-          image: { url: getMenuLogo() },
+          image: { url: getMenuLogo(sid) },
           caption: menuText,
           mentions: [userJid],
         },
