@@ -173,23 +173,32 @@ _*✰┈ ${showName} ┈✰*_
 > ${FOOTER_DEV}
 `.trim();
 
-      // One message only — never split menu into parts
-      // Image caption max ~1024; if longer send as single text (full UI kept)
+      // Always show logo, then full menu as ONE text (caption limit ~1024)
       const mentions = userJid ? [userJid] : [];
-      if (menuText.length <= 1024) {
+      const shortCaption = `*🌸 ${showName}*
+*🌺 𝐇𝙴𝙻𝙻𝙾 : @${user}*
+*❰🌟 ${greet} ❱*`;
+
+      try {
         await sock.sendMessage(
           from,
-          { image: { url: logo }, caption: menuText, mentions },
+          {
+            image: { url: logo },
+            caption: shortCaption,
+            mentions,
+          },
           { quoted: msg }
         );
-      } else {
-        // Single text message with full menu (no 2nd part)
-        await sock.sendMessage(
-          from,
-          { text: menuText, mentions },
-          { quoted: msg }
-        );
+      } catch (logoErr) {
+        console.error('Menu logo fail:', logoErr.message);
       }
+
+      // Full menu UI — single text message (not split)
+      await sock.sendMessage(
+        from,
+        { text: menuText, mentions },
+        { quoted: msg }
+      );
     } catch (err) {
       console.error('Menu Error:', err.message);
       try {
