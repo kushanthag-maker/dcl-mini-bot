@@ -8,7 +8,7 @@ const SEARCH_API = 'https://api.zanta-mini.store/api/sinhalasub/search';
 const DL_API = 'https://api.zanta-mini.store/api/sinhalasub/dl';
 const PENDING_TTL_MS = 3 * 60 * 1000;
 // WhatsApp practical send limit (document)
-const MAX_SEND_BYTES = 95 * 1024 * 1024;
+const MAX_SEND_BYTES = 2 * 1024 * 1024 * 1024; // 2GB WhatsApp document limit
 
 const pending = new Map(); // from -> state
 
@@ -222,11 +222,11 @@ async function showQualities({ sock, msg, from, item }) {
 
     qualities.forEach((q, i) => {
       const tooBig = q.bytes > MAX_SEND_BYTES;
-      list += `│  *${i + 1}.* ${q.label}  ·  ${q.sizeText}${tooBig ? '  ⚠️ WA limit' : ''}\n`;
+      list += `│  *${i + 1}.* ${q.label}  ·  ${q.sizeText}${tooBig ? '  ⚠️ >2GB' : ''}\n`;
     });
 
     list += `\n│  👇 *${config.prefix || '.'}ssub <number>*\n│  ⏳ 3 min\n│\n`;
-    list += `│  ⚠️ 100MB+ files WhatsApp එකට යවන්න බැහැ\n`;
+    list += `│  ⚠️ Max ~2GB (document)\n`;
     list += `╰──────────────────────╯`;
 
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
@@ -256,7 +256,7 @@ async function showQualities({ sock, msg, from, item }) {
 async function downloadQuality({ sock, msg, from, quality, title, thumb }) {
   const loading = await sock.sendMessage(
     from,
-    { text: `📥 *Download start...*\n🎬 ${quality.label}\n📦 ${quality.sizeText || ''}` },
+    { text: `📥 *Preparing...*\n🎬 ${quality.label}\n📦 ${quality.sizeText || ''}` },
     { quoted: msg }
   );
 
@@ -270,89 +270,93 @@ async function downloadQuality({ sock, msg, from, quality, title, thumb }) {
     if (bytes > MAX_SEND_BYTES) {
       return sock.sendMessage(from, {
         text:
-          `❌ *File ගොඩක් ලොකුයි*\n\n` +
+          `❌ *File 2GB limit එකට වඩා ලොකුයි*\n\n` +
           `📦 Size: *${formatBytes(bytes)}*\n` +
-          `📱 WhatsApp limit: ~95MB\n\n` +
-          `💡 *${quality.label}* WhatsApp එකට යවන්න බැහැ.\n` +
-          `SD/ලොකු නොවන file එකක් තියෙන movie එකක් try කරන්න.`,
+          `📱 Max: 2 GB (document)\n\n` +
+          `💡 ලොකු quality අඩු එකක් (480p) try කරන්න.`,
         edit: loading.key,
       });
     }
 
-    await sock
-      .sendMessage(from, {
-        text: `⬇️ *Downloading...*\n⏳ ${formatBytes(bytes) || quality.sizeText}`,
-        edit: loading.key,
-      })
-      .catch(() => {});
-
-    const buffer = await downloadBuffer(quality.url, MAX_SEND_BYTES + 5 * 1024 * 1024);
-
-    if (!buffer || buffer.length < 10000) {
-      throw new Error('Downloaded file empty / invalid');
-    }
-
-    const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
+    const sizeText = bytes ? formatBytes(bytes) : quality.sizeText || '';
     const caption = `
 ╭───「 🎬 *SINHALASUB* 」───╮
 │
 │  📌 *Title*   ›  ${String(title).slice(0, 60)}
 │  🎥 *Quality* ›  ${quality.label}
-│  📦 *Size*    ›  ${sizeMB} MB
+│  📦 *Size*    ›  ${sizeText}
 │
 ╰──────────────────────╯`.trim();
+
+    const fileName =
+      (String(title).replace(/[\/\\:*?"<>|]/g, '').slice(0, 40) || 'movie') + '.mp4';
+
+    await sock
+      .sendMessage(from, {
+        text: `⬆️ *WhatsApp එකට upload වෙමින්...*\n📦 ${sizeText}\n⏳ ලොකු file නම් වෙලා යයි`,
+        edit: loading.key,
+      })
+      .catch(() => {});
 
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
     if (thumb && /^https?:\/\//i.test(thumb)) {
       await sock
         .sendMessage(from, { image: { url: thumb }, caption }, { quoted: msg })
-        .catch(() => sock.sendMessage(from, { text: caption }, { quoted: msg }));
+        .catch(() =>
+          sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {})
+        );
     } else {
       await sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {});
     }
 
-    const fileName = `${String(title)
-      .replace(/[\/\\:*?"<>|]/g, '')
-      .slice(0, 40) || 'movie'}.mp4`;
-
+    // Stream upload: Baileys downloads from URL (no full 2GB RAM buffer on our side)
+    // Works best for large documents
     try {
-      if (buffer.length > 64 * 1024 * 1024) {
-        await sock.sendMessage(
-          from,
-          {
-            document: buffer,
-            mimetype: 'video/mp4',
-            fileName,
-            caption: '📁 Movie file',
-          },
-          { quoted: msg }
-        );
-      } else {
-        await sock.sendMessage(
-          from,
-          { video: buffer, mimetype: 'video/mp4', caption: fileName, fileName },
-          { quoted: msg }
-        );
-      }
-    } catch (e1) {
-      console.error('SSub send fail:', e1.message);
       await sock.sendMessage(
         from,
         {
-          document: buffer,
+          document: { url: quality.url },
           mimetype: 'video/mp4',
           fileName,
-          caption: '📁 Movie (document)',
+          caption: `🎬 ${quality.label} · ${sizeText}`,
         },
         { quoted: msg }
       );
+      return;
+    } catch (e1) {
+      console.error('SSub URL document fail:', e1.message);
     }
+
+    // Fallback: buffer download (for smaller files / if URL stream unsupported)
+    const statusMsg = await sock.sendMessage(
+      from,
+      { text: '🔄 *Buffer download fallback...*' },
+      { quoted: msg }
+    );
+
+    const buffer = await downloadBuffer(quality.url, MAX_SEND_BYTES + 10 * 1024 * 1024);
+    if (!buffer || buffer.length < 10000) {
+      throw new Error('Downloaded file empty / invalid');
+    }
+
+    await sock.sendMessage(from, { delete: statusMsg.key }).catch(() => {});
+
+    await sock.sendMessage(
+      from,
+      {
+        document: buffer,
+        mimetype: 'video/mp4',
+        fileName,
+        caption: `🎬 ${quality.label} · ${formatBytes(buffer.length)}`,
+      },
+      { quoted: msg }
+    );
   } catch (err) {
     console.error('SSub download error:', err.message);
     await sock
       .sendMessage(from, {
-        text: `❌ Download fail.\n\n\`${err.message}\``,
+        text: `❌ Download / upload fail.\n\n\`${err.message}\`\n\n💡 File ගොඩක් ලොකු නම් network timeout වෙන්න පුළුවන්.`,
         edit: loading.key,
       })
       .catch(() => {});
