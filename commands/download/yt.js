@@ -1,9 +1,12 @@
 const axios = require('axios');
+const https = require('https');
+const http = require('http');
 const config = require('../../config');
 
-const API_URL = 'https://whiteshadow-x-api.onrender.com/api/download/ytdlfast';
+// ytdlfast = googlevideo (IP-locked 403). /api/download/yt = working proxy CDN
+const API_URL = 'https://whiteshadow-x-api.onrender.com/api/download/yt';
 const API_TOKEN = 'CkExxE';
-const MAX_WA_BYTES = 512 * 1024 * 1024; // practical axios/buffer cap (~512MB)
+const MAX_BYTES = 512 * 1024 * 1024;
 
 function extractYtUrl(text) {
   const m = String(text || '').match(
@@ -12,39 +15,87 @@ function extractYtUrl(text) {
   return m ? m[0].replace(/[)\]>,.]+$/, '') : null;
 }
 
-function pickVideo(list) {
-  if (!Array.isArray(list) || !list.length) return null;
-  // Prefer progressive mp4 that WhatsApp can play: 360p first, then 720p, then any mp4
-  const score = (item) => {
-    const q = String(item.quality || '').toLowerCase();
-    const f = String(item.format || '').toLowerCase();
-    let s = 0;
-    if (f === 'mp4') s += 50;
-    if (q.includes('360')) s += 30;
-    else if (q.includes('480')) s += 25;
-    else if (q.includes('720')) s += 15;
-    else if (q.includes('144') || q.includes('240')) s += 10;
-    return s;
-  };
-  const sorted = [...list].filter((x) => x && x.url).sort((a, b) => score(b) - score(a));
-  return sorted[0] || null;
+/** Stream URL → Buffer (follows redirects, Range-friendly CDNs) */
+function downloadBuffer(url, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 8) return reject(new Error('Too many redirects'));
+    const lib = url.startsWith('https') ? https : http;
+    const req = lib.get(
+      url,
+      {
+        timeout: 300000,
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: '*/*',
+          'Accept-Encoding': 'identity',
+          Referer: 'https://www.youtube.com/',
+          Origin: 'https://www.youtube.com',
+        },
+      },
+      (res) => {
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+          res.resume();
+          const next = res.headers.location.startsWith('http')
+            ? res.headers.location
+            : new URL(res.headers.location, url).href;
+          return downloadBuffer(next, redirects + 1).then(resolve, reject);
+        }
+
+        // 200 or 206 Partial
+        if (res.statusCode !== 200 && res.statusCode !== 206) {
+          res.resume();
+          return reject(new Error(`Download HTTP ${res.statusCode}`));
+        }
+
+        const chunks = [];
+        let total = 0;
+        res.on('data', (c) => {
+          chunks.push(c);
+          total += c.length;
+          if (total > MAX_BYTES) {
+            req.destroy();
+            reject(new Error('File too large'));
+          }
+        });
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode,
+            contentType: String(res.headers['content-type'] || ''),
+            buffer: Buffer.concat(chunks),
+          });
+        });
+        res.on('error', reject);
+      }
+    );
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Download timeout'));
+    });
+    req.on('error', reject);
+  });
 }
 
-function pickAudio(list) {
-  if (!Array.isArray(list) || !list.length) return null;
-  const score = (item) => {
-    const q = String(item.quality || '').toLowerCase();
-    const f = String(item.format || '').toLowerCase();
-    let s = 0;
-    if (f === 'm4a') s += 40;
-    if (f === 'mp3') s += 50;
-    if (f === 'opus') s += 20;
-    const kb = parseInt(q, 10);
-    if (!isNaN(kb)) s += Math.min(kb, 200) / 10;
-    return s;
+async function downloadBufferAxios(url) {
+  const res = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 300000,
+    maxRedirects: 8,
+    maxContentLength: MAX_BYTES,
+    maxBodyLength: MAX_BYTES,
+    validateStatus: () => true,
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      Accept: '*/*',
+      Referer: 'https://www.youtube.com/',
+    },
+  });
+  return {
+    status: res.status,
+    contentType: String(res.headers['content-type'] || ''),
+    buffer: Buffer.from(res.data || []),
   };
-  const sorted = [...list].filter((x) => x && x.url).sort((a, b) => score(b) - score(a));
-  return sorted[0] || null;
 }
 
 module.exports = {
@@ -75,7 +126,7 @@ module.exports = {
       );
     }
 
-    let mode = 'video'; // video | audio
+    let mode = 'video';
     let raw = args.join(' ').trim();
     if (/^(audio|mp3|song)$/i.test(args[0])) {
       mode = 'audio';
@@ -101,6 +152,7 @@ module.exports = {
     );
 
     try {
+      // Working proxy API (not IP-locked googlevideo)
       const apiRes = await axios.get(API_URL, {
         params: { url, apitoken: API_TOKEN },
         timeout: 120000,
@@ -119,71 +171,59 @@ module.exports = {
         throw new Error(body.message || body.error || 'API failed');
       }
 
-      const meta = body.metadata || body.meta || {};
-      const result = body.result || body.data || body;
+      const meta = body.metadata || {};
+      const result = body.result || body.data || {};
       const title = meta.title || result.title || 'YouTube';
-      const duration = meta.duration || result.duration || 'N/A';
+      const author = meta.author || meta.channel || 'Unknown';
       const thumb = meta.thumbnail || result.thumbnail || null;
+      const views = meta.views || null;
 
-      const videos = result.video || result.videos || [];
-      const audios = result.audio || result.audios || [];
+      const videoUrl = result.video_url || result.video || result.mp4 || null;
+      const audioUrl = result.audio_url || result.audio || result.mp3 || null;
 
-      let picked =
-        mode === 'audio' ? pickAudio(audios) || pickAudio(videos) : pickVideo(videos);
-
-      if (!picked || !picked.url) {
+      const mediaUrl = mode === 'audio' ? audioUrl || videoUrl : videoUrl || audioUrl;
+      if (!mediaUrl) {
         throw new Error('Download link හොයාගන්න බැරි වුණා');
       }
 
-      const quality = picked.quality || picked.format || mode;
-      const isAudio =
-        mode === 'audio' ||
-        /m4a|mp3|opus|audio/i.test(String(picked.format || '') + String(picked.quality || ''));
-
       await sock
         .sendMessage(from, {
-          text: `⬇️ *Download කරමින්...*\n🎬 ${quality}`,
+          text: `⬇️ *Download කරමින්...*\n📁 ${mode === 'audio' ? 'Audio' : 'Video'}`,
           edit: loading.key,
         })
         .catch(() => {});
 
-      const mediaRes = await axios.get(picked.url, {
-        responseType: 'arraybuffer',
-        timeout: 300000,
-        maxContentLength: MAX_WA_BYTES,
-        maxBodyLength: MAX_WA_BYTES,
-        maxRedirects: 5,
-        validateStatus: () => true,
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          Referer: 'https://www.youtube.com/',
-        },
-      });
-
-      const ct = String(mediaRes.headers?.['content-type'] || '').toLowerCase();
-      if (
-        mediaRes.status !== 200 ||
-        ct.includes('text/html') ||
-        ct.includes('application/json')
-      ) {
-        throw new Error('Media file ලබාගන්න බැරි වුණා (link expired)');
+      let dl;
+      try {
+        dl = await downloadBuffer(mediaUrl);
+      } catch (e1) {
+        console.log('[YT] native fail:', e1.message, '— axios retry');
+        dl = await downloadBufferAxios(mediaUrl);
       }
 
-      const buffer = Buffer.from(mediaRes.data);
-      if (!buffer.length || buffer.length < 5000) {
-        throw new Error('File empty / invalid');
+      console.log('[YT] status=', dl.status, 'ct=', dl.contentType, 'size=', dl.buffer.length);
+
+      if ((dl.status !== 200 && dl.status !== 206) || dl.buffer.length < 5000) {
+        throw new Error(
+          `Media download fail (HTTP ${dl.status}, ${dl.buffer.length} bytes)`
+        );
       }
 
+      const head = dl.buffer.slice(0, 40).toString('utf8');
+      if (head.includes('<html') || head.trim().startsWith('{')) {
+        throw new Error('Download returned HTML/JSON instead of media');
+      }
+
+      const buffer = dl.buffer;
       const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
-      // No hard 60MB block — try send; large files as document
+      const isAudio = mode === 'audio';
 
       const caption = `
 ╭───「 ▶️ *YOUTUBE* 」───╮
 │
 │  📌 *Title*    ›  ${String(title).slice(0, 60)}
-│  ⏱ *Duration* ›  ${duration}
-│  🎬 *Quality*  ›  ${quality}
+│  👤 *Author*   ›  ${String(author).slice(0, 40)}
+│  👁 *Views*    ›  ${views != null ? views : 'N/A'}
 │  📦 *Size*     ›  ${sizeMB} MB
 │  📁 *Type*     ›  ${isAudio ? 'Audio' : 'Video'}
 │
@@ -191,20 +231,18 @@ module.exports = {
 
       await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
-      if (thumb && /^https?:\/\//i.test(thumb) && isAudio) {
-        try {
-          await sock.sendMessage(from, { image: { url: thumb }, caption }, { quoted: msg });
-        } catch (_) {
+      if (isAudio) {
+        if (thumb && /^https?:\/\//i.test(thumb)) {
+          try {
+            await sock.sendMessage(from, { image: { url: thumb }, caption }, { quoted: msg });
+          } catch (_) {
+            await sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {});
+          }
+        } else {
           await sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {});
         }
-      }
 
-      if (isAudio) {
-        let mimetype = 'audio/mp4';
-        if (/mp3/i.test(quality + ct)) mimetype = 'audio/mpeg';
-        else if (/opus/i.test(quality + ct)) mimetype = 'audio/ogg; codecs=opus';
-        else if (/m4a|mp4/i.test(quality + ct)) mimetype = 'audio/mp4';
-
+        const mimetype = 'audio/mpeg';
         try {
           await sock.sendMessage(
             from,
@@ -212,7 +250,7 @@ module.exports = {
               audio: buffer,
               mimetype,
               ptt: false,
-              fileName: `${String(title).slice(0, 40).replace(/[^\w\s\-]/g, '')}.m4a`,
+              fileName: 'youtube-audio.mp3',
             },
             { quoted: msg }
           );
@@ -222,14 +260,14 @@ module.exports = {
             {
               document: buffer,
               mimetype,
-              fileName: 'youtube-audio.m4a',
-              caption: caption,
+              fileName: 'youtube-audio.mp3',
+              caption: '🎵 ' + String(title).slice(0, 50),
             },
             { quoted: msg }
           );
         }
       } else {
-        const asDoc = buffer.length > 64 * 1024 * 1024; // large → document first
+        const asDoc = buffer.length > 64 * 1024 * 1024;
         try {
           if (asDoc) {
             await sock.sendMessage(
@@ -238,7 +276,7 @@ module.exports = {
                 document: buffer,
                 mimetype: 'video/mp4',
                 fileName: 'youtube.mp4',
-                caption: caption + '\n\n📁 _Large file — sent as document_',
+                caption: caption + '\n\n📁 _Large file — document_',
               },
               { quoted: msg }
             );
