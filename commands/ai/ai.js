@@ -1,13 +1,10 @@
 const axios = require('axios');
 const config = require('../../config');
-const { getCoins, useCoin, addCoins } = require('../../lib/coins');
-
-const ADMIN_NUMBER = '94769904294';
 const WOLF_API_KEY = 'wxa_f_4e840b5e42';
 
 module.exports = {
   name: 'ai',
-  aliases: ['darkai', 'wormgpt', 'chat', 'gpt'],
+  aliases: ['darkai', 'wormgpt', 'chat'],
   description: 'Chat with DCL MINI AI',
   category: 'ai',
   async execute({ sock, msg, from, args, senderNumber, isOwner, isFromMe }) {
@@ -24,27 +21,6 @@ module.exports = {
 │
 ╰──────────────────────╯`,
         }, { quoted: msg });
-      }
-
-      const userNum = String(senderNumber || '').replace(/[^0-9]/g, '');
-      const isAdmin = userNum === ADMIN_NUMBER || isOwner || isFromMe;
-
-      // Coin check (admin = unlimited)
-      if (!isAdmin) {
-        const coins = await getCoins(userNum);
-        if (coins <= 0) {
-          return sock.sendMessage(from, {
-            text: `╭───「 👾 *${config.botName} AI* 」───╮
-│
-│  ❌ *Requests ඉවරයි!*
-│
-│  🪙 *Balance* ›  0
-│
-│  💡 Admin ගෙන් requests ලබාගන්න
-│
-╰──────────────────────╯`,
-          }, { quoted: msg });
-        }
       }
 
       await sock.sendMessage(from, {
@@ -80,19 +56,6 @@ module.exports = {
         );
         await sock.sendMessage(from, { react: { text: '✅', key: msg.key } }).catch(() => {});
         return;
-      }
-
-      // Deduct coin
-      let remaining = null;
-      if (!isAdmin) {
-        const result = await useCoin(userNum);
-        if (!result.ok) {
-          return sock.sendMessage(from, {
-            text: '❌ Requests ඉවරයි. Admin ගෙන් ලබාගන්න.',
-            edit: loading.key,
-          }).catch(() => {});
-        }
-        remaining = result.coins;
       }
 
       // ===== Get AI reply (with fallback) =====
@@ -157,22 +120,16 @@ module.exports = {
       }
 
       if (!aiReply || !String(aiReply).trim()) {
-        // refund coin
-        if (!isAdmin) await addCoins(userNum, 1).catch(() => {});
         return sock.sendMessage(from, {
           text: '❌ AI සේවාව දැන් ලබාගත නොහැක. මඳ වේලාවකින් නැවත try කරන්න.',
           edit: loading.key,
         }).catch(() => {});
       }
 
-      const balanceLine = isAdmin
-        ? `> *Unlimited Access*`
-        : `> 🪙 *Requests left:* ${remaining}`;
-
       const finalMessage =
         `*↳ ❝ [👾 ${config.botName} AI 👾] ¡! ❞*\n\n` +
         `${String(aiReply).trim()}\n\n` +
-        `${balanceLine}\n` +
+        `> *Unlimited Access*\n` +
         `> *Built by Zayra 𝜗𝜚⋆*`;
 
       await sock.sendMessage(from, {
