@@ -3,7 +3,7 @@ const config = require('../../config');
 
 const API_URL = 'https://whiteshadow-x-api.onrender.com/api/download/ytdlfast';
 const API_TOKEN = 'CkExxE';
-const MAX_WA_BYTES = 60 * 1024 * 1024;
+const MAX_WA_BYTES = 512 * 1024 * 1024; // practical axios/buffer cap (~512MB)
 
 function extractYtUrl(text) {
   const m = String(text || '').match(
@@ -150,8 +150,8 @@ module.exports = {
       const mediaRes = await axios.get(picked.url, {
         responseType: 'arraybuffer',
         timeout: 300000,
-        maxContentLength: MAX_WA_BYTES + 15 * 1024 * 1024,
-        maxBodyLength: MAX_WA_BYTES + 15 * 1024 * 1024,
+        maxContentLength: MAX_WA_BYTES,
+        maxBodyLength: MAX_WA_BYTES,
         maxRedirects: 5,
         validateStatus: () => true,
         headers: {
@@ -176,12 +176,7 @@ module.exports = {
       }
 
       const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
-      if (buffer.length > MAX_WA_BYTES) {
-        return sock.sendMessage(from, {
-          text: `❌ File ලොකුයි (*${sizeMB} MB*).\n💡 \`${prefix}yt audio <url>\` try කරන්න හෝ short video එකක්.`,
-          edit: loading.key,
-        });
-      }
+      // No hard 60MB block — try send; large files as document
 
       const caption = `
 ╭───「 ▶️ *YOUTUBE* 」───╮
@@ -234,17 +229,31 @@ module.exports = {
           );
         }
       } else {
+        const asDoc = buffer.length > 64 * 1024 * 1024; // large → document first
         try {
-          await sock.sendMessage(
-            from,
-            {
-              video: buffer,
-              mimetype: 'video/mp4',
-              caption,
-              fileName: 'youtube.mp4',
-            },
-            { quoted: msg }
-          );
+          if (asDoc) {
+            await sock.sendMessage(
+              from,
+              {
+                document: buffer,
+                mimetype: 'video/mp4',
+                fileName: 'youtube.mp4',
+                caption: caption + '\n\n📁 _Large file — sent as document_',
+              },
+              { quoted: msg }
+            );
+          } else {
+            await sock.sendMessage(
+              from,
+              {
+                video: buffer,
+                mimetype: 'video/mp4',
+                caption,
+                fileName: 'youtube.mp4',
+              },
+              { quoted: msg }
+            );
+          }
         } catch (e1) {
           console.error('YT video send fail:', e1.message);
           await sock.sendMessage(
