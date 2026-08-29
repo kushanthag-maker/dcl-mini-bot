@@ -11,7 +11,10 @@ const FOOTER_DEV = 'RED DEVIL AND ZAYRA DEV';
 
 function getMenuLogo(sessionId) {
   try {
-    return getSettings(sessionId).logo || DEFAULT_LOGO;
+    const logo = getSettings(sessionId).logo || DEFAULT_LOGO;
+    // ignore legacy default logo
+    if (!logo || logo.includes('4dvou4.png')) return DEFAULT_LOGO;
+    return logo;
   } catch {
     return DEFAULT_LOGO;
   }
@@ -170,34 +173,22 @@ _*✰┈ ${showName} ┈✰*_
 > ${FOOTER_DEV}
 `.trim();
 
-      // WhatsApp caption limit ~1024 — if too long, send image then text parts
+      // One message only — never split menu into parts
+      // Image caption max ~1024; if longer send as single text (full UI kept)
+      const mentions = userJid ? [userJid] : [];
       if (menuText.length <= 1024) {
         await sock.sendMessage(
           from,
-          {
-            image: { url: logo },
-            caption: menuText,
-            mentions: userJid ? [userJid] : [],
-          },
+          { image: { url: logo }, caption: menuText, mentions },
           { quoted: msg }
         );
       } else {
+        // Single text message with full menu (no 2nd part)
         await sock.sendMessage(
           from,
-          {
-            image: { url: logo },
-            caption: menuText.slice(0, 1000),
-            mentions: userJid ? [userJid] : [],
-          },
+          { text: menuText, mentions },
           { quoted: msg }
         );
-        // remaining categories as text
-        let rest = menuText.slice(1000);
-        while (rest.length > 0) {
-          const chunk = rest.slice(0, 3500);
-          rest = rest.slice(3500);
-          await sock.sendMessage(from, { text: chunk }, { quoted: msg });
-        }
       }
     } catch (err) {
       console.error('Menu Error:', err.message);
