@@ -1,32 +1,52 @@
+const os = require('os');
 const config = require('../../config');
 const { getSettings } = require('../../lib/botSettings');
 const moment = require('moment-timezone');
 const { getAllCommands } = require('../../lib/commandHandler');
 
+const MENU_VIDEO = 'https://files.catbox.moe/jz1qbc.mp4';
+const DEFAULT_LOGO = 'https://files.catbox.moe/bp9p86.png';
+const DISPLAY_BOT_NAME = '𝕯𝕬𝕽𝕶 𝕼𝖀𝕰𝕰𝕹 𝕸𝕴𝕹𝕴';
+const FOOTER_DEV = 'RED DEVIL AND ZAYRA DEV';
+
 function getMenuLogo(sessionId) {
-  try { return getSettings(sessionId).logo || 'https://files.catbox.moe/4dvou4.png'; } catch { return 'https://files.catbox.moe/4dvou4.png'; }
+  try {
+    return getSettings(sessionId).logo || DEFAULT_LOGO;
+  } catch {
+    return DEFAULT_LOGO;
+  }
 }
 
 const CATEGORY_META = {
-  owner:    { title: '𝗢𝗪𝗡𝗘𝗥',    emoji: '👑', order: 1 },
-  group:    { title: '𝗚𝗥𝗢𝗨𝗣',    emoji: '👥', order: 2 },
-  download: { title: '𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗', emoji: '📥', order: 3 },
-  ai:       { title: '𝗔𝗜',       emoji: '🤖', order: 4 },
-  utility:  { title: '𝗨𝗧𝗜𝗟𝗜𝗧𝗬',  emoji: '🛠️', order: 5 },
-  fun:      { title: '𝗙𝗨𝗡',      emoji: '🎮', order: 6 },
+  download: { title: '𝐃ᴏᴡɴʟᴏᴀᴅ', emoji: '💎', order: 1 },
+  media: { title: '𝐌ᴇᴅɪᴀ', emoji: '🌸', order: 2 },
+  ai: { title: '𝐀ɪ', emoji: '🤖', order: 3 },
+  tools: { title: '𝐓ᴏᴏʟꜱ', emoji: '🛠️', order: 4 },
+  utility: { title: '𝐆ᴇɴᴇʀᴀʟ', emoji: '💖', order: 5 },
+  group: { title: '𝐆ʀᴏᴜᴘ', emoji: '🦋', order: 6 },
+  owner: { title: '𝐀ᴅᴍɪɴ', emoji: '👑', order: 7 },
+  fun: { title: '𝐅ᴜɴ', emoji: '🌟', order: 8 },
+  movie: { title: '𝐌ᴏᴠɪᴇ', emoji: '🌺', order: 9 },
 };
 
 function formatUptime(sec) {
   const d = Math.floor(sec / 86400);
   const h = Math.floor((sec % 86400) / 3600);
   const m = Math.floor((sec % 3600) / 60);
-  const s = Math.floor(sec % 60);
-  const parts = [];
-  if (d) parts.push(`${d}d`);
-  if (h) parts.push(`${h}h`);
-  if (m) parts.push(`${m}m`);
-  parts.push(`${s}s`);
-  return parts.join(' ');
+  return `${d}D ${h}H ${m}M`;
+}
+
+function greeting() {
+  const h = moment().tz(config.timezone || 'Asia/Colombo').hour();
+  if (h >= 5 && h < 12) return '🌞 GOOD MORNING';
+  if (h >= 12 && h < 17) return '🌞 GOOD AFTERNOON';
+  if (h >= 17 && h < 21) return '🌆 GOOD EVENING';
+  return '🌙 GOOD NIGHT';
+}
+
+function ramUsage() {
+  const used = process.memoryUsage().rss;
+  return (used / 1024 / 1024).toFixed(2) + ' MB';
 }
 
 function buildCategoryBlocks(prefix) {
@@ -34,7 +54,8 @@ function buildCategoryBlocks(prefix) {
   const byCat = {};
 
   for (const cmd of all) {
-    const cat = cmd.category || 'utility';
+    let cat = (cmd.category || 'utility').toLowerCase();
+    if (cat === 'tools') cat = 'tools';
     if (!byCat[cat]) byCat[cat] = [];
     byCat[cat].push(cmd);
   }
@@ -42,25 +63,23 @@ function buildCategoryBlocks(prefix) {
   const ordered = Object.keys(byCat).sort((a, b) => {
     const oa = (CATEGORY_META[a] && CATEGORY_META[a].order) || 99;
     const ob = (CATEGORY_META[b] && CATEGORY_META[b].order) || 99;
-    return oa - ob;
+    if (oa !== ob) return oa - ob;
+    return a.localeCompare(b);
   });
 
   let out = '';
   for (const cat of ordered) {
-    const meta = CATEGORY_META[cat] || { title: cat.toUpperCase(), emoji: '📌' };
+    const meta = CATEGORY_META[cat] || {
+      title: cat.toUpperCase(),
+      emoji: '📌',
+    };
     const cmds = byCat[cat].sort((a, b) => a.name.localeCompare(b.name));
 
-    out += `\n╭───「 ${meta.emoji} *${meta.title}* 」───╮\n│\n`;
-
+    out += `\n*╭──┉❰ ${meta.emoji} ${meta.title} ❱┉──•*\n`;
     for (const cmd of cmds) {
-      const aliases = Array.isArray(cmd.aliases) && cmd.aliases.length
-        ? `  _${cmd.aliases.slice(0, 3).join(', ')}_`
-        : '';
-      const pad = cmd.name.length < 10 ? ' '.repeat(10 - cmd.name.length) : ' ';
-      out += `│  ▸ *${prefix}${cmd.name}*${pad}${aliases}\n`;
+      out += `*│◊│* ✦ \`${prefix}${cmd.name}\`\n`;
     }
-
-    out += `│\n╰──────────────────────╯\n`;
+    out += `*│◊╰────────────┉•┉*\n*╰──────────────────┉*\n`;
   }
   return out;
 }
@@ -70,59 +89,116 @@ module.exports = {
   aliases: ['help', 'list', 'm', 'commands'],
   description: 'Show all available commands with banner',
   category: 'utility',
+
   async execute({ sock, msg, from, sessionId }) {
     try {
       const prefix = config.prefix || '.';
       const sid = sessionId || null;
       const settings = getSettings(sid);
-      const botName = settings.botName || config.botName || 'Zayra';
+      const botName =
+        settings.botName || config.botName || DISPLAY_BOT_NAME;
+      const showName = DISPLAY_BOT_NAME;
       const runtime = formatUptime(process.uptime());
-      const now = moment().tz(config.timezone || 'Asia/Colombo').format('YYYY-MM-DD  HH:mm');
       const userJid = msg.key.participant || msg.key.remoteJid || '';
       const user = String(userJid).split('@')[0].split(':')[0];
       const totalCmds = getAllCommands().length;
+      const logo = getMenuLogo(sid);
+      const greet = greeting();
+      const ram = ramUsage();
 
-      const header = `
-╭═══════════════╮
-│  ⚡ *${botName}*
-╰═══════════════╯
+      // 1) Video note first (circular video if supported)
+      try {
+        await sock.sendMessage(
+          from,
+          {
+            video: { url: MENU_VIDEO },
+            mimetype: 'video/mp4',
+            ptv: true, // video note
+          },
+          { quoted: msg }
+        );
+      } catch (e1) {
+        console.error('Menu video note fail:', e1.message);
+        try {
+          await sock.sendMessage(
+            from,
+            {
+              video: { url: MENU_VIDEO },
+              mimetype: 'video/mp4',
+              gifPlayback: true,
+            },
+            { quoted: msg }
+          );
+        } catch (e2) {
+          console.error('Menu video fail:', e2.message);
+        }
+      }
 
-╭───「 📋 *𝗦𝗧𝗔𝗧𝗨𝗦* 」───╮
-│
-│  👤 *User*     ›  @${user}
-│  🤖 *Bot*      ›  ${botName}
-│  ⚙️ *Prefix*   ›  *${prefix}*
-│  📦 *Commands* ›  *${totalCmds}*
-│  ⏱ *Runtime*  ›  _${runtime}_
-│  🕐 *Time*     ›  _${now}_
-│  📶 *Status*   ›  Online ✅
-│
-╰──────────────────────╯
+      // 2) Fancy menu caption + logo
+      const menuText = `
+*╭─┉❰ 🌸 𝐖𝙴𝙻𝙲𝙾𝙼𝙴 𝐔𝚂𝙴𝚁 🌸 ❱┉─┉──•*
+*│ 🌺 𝐇𝙴𝙻𝙻𝙾 : @${user}*
+*╰┉────────────┉─•*
+
+*❰🌟 𝐆ʀᴇᴇᴛɪɴɢ : ${greet} ❱*
+
+┆  •    ┆    °  ┆  •°    ┆✦ ˟˞ˁ㋞˟˖˟ˣˣ🌸
+┆     ° ┆  +   ┆     ×🌟˖˟ˠ˟ͣͥͬ🌺
+┆  •ʹ  °┆      💖 ◊ʅ⃛⃰˃˪෴˥
+┆        🌺°•°✦┋
+🌸.°•°°🌟┇
+_*🌟✦•°🌸↝❰💖✦•°🌺↝🤭*_
+
+*╭──┉❰ 👑 𝐒𝐘𝐒𝐓𝐄𝐌 𝐈𝐍𝐅𝐎 ❱┉──•*
+*│◊│* ✦ 🤖 \`ʙᴏᴛ\` : ${showName}
+*│◊│* ✦ 👑 \`ᴏᴡɴᴇʀ\` : ${FOOTER_DEV}
+*│◊│* ✦ 💾 \`ʀᴀᴍ\` : ${ram}
+*│◊│* ✦ ⏱️ \`ᴜᴘᴛɪᴍᴇ\` : ${runtime}
+*│◊│* ✦ 📦 \`ᴄᴍᴅꜱ\` : ${totalCmds}
+*│◊│* ✦ ⚙️ \`ᴘʀᴇғɪx\` : ${prefix}
+*│◊╰────────────┉•┉*
+*╰──────────────────┉*
+${buildCategoryBlocks(prefix)}
+*╭━━〔 💬 𝐍𝐎𝐓𝐈𝐂𝐄 〕━━⬣*
+*│◊│* 📌 Type a command with prefix *${prefix}*
+*│◊│* 🌸 Example: *${prefix}song* *${prefix}tt* *${prefix}gpt*
+*╰━━━━━━━━━━━━━━⬣*
+
+_*🌟 𝐇𝐀𝐕𝐄 𝐀 𝐍𝐈𝐂𝐄 𝐃𝐀𝐘 🌺*_
+_*✰┈ ${showName} ┈✰*_
+
+> ${FOOTER_DEV}
 `.trim();
 
-      const body = buildCategoryBlocks(prefix);
-
-      const footer = `
-╭───「 ℹ️ *𝗜𝗡𝗙𝗢* 」───╮
-│
-│  💡 Type *${prefix}menu* anytime
-│  🔥 *Zayra* › _v1.0_
-│  💜 Fast · Stable · Secure
-│
-╰──────────────────────╯
-`.trim();
-
-      const menuText = `${header}\n${body}\n${footer}`;
-
-      await sock.sendMessage(
-        from,
-        {
-          image: { url: getMenuLogo(sid) },
-          caption: menuText,
-          mentions: [userJid],
-        },
-        { quoted: msg }
-      );
+      // WhatsApp caption limit ~1024 — if too long, send image then text parts
+      if (menuText.length <= 1024) {
+        await sock.sendMessage(
+          from,
+          {
+            image: { url: logo },
+            caption: menuText,
+            mentions: userJid ? [userJid] : [],
+          },
+          { quoted: msg }
+        );
+      } else {
+        await sock.sendMessage(
+          from,
+          {
+            image: { url: logo },
+            caption: menuText.slice(0, 1000),
+            mentions: userJid ? [userJid] : [],
+          },
+          { quoted: msg }
+        );
+        // remaining categories as text
+        let rest = menuText.slice(1000);
+        while (rest.length > 0) {
+          const chunk = rest.slice(0, 3500);
+          rest = rest.slice(3500);
+          await sock.sendMessage(from, { text: chunk }, { quoted: msg });
+        }
+      }
     } catch (err) {
       console.error('Menu Error:', err.message);
       try {
