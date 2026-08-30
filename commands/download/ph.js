@@ -4,8 +4,6 @@ const config = require('../../config');
 const SEARCH_API = 'https://porn-hub-scrap.vercel.app/api/search';
 const DL_API = 'https://porn-hub-scrap.vercel.app/api/download';
 const PENDING_TTL_MS = 2 * 60 * 1000;
-const MAX_WA_BYTES = 95 * 1024 * 1024;
-const MAX_SEGMENTS = 400; // safety cap
 
 const pending = new Map();
 
@@ -19,120 +17,34 @@ function extractPhUrl(text) {
   return m ? m[0].replace(/[)\]>,.]+$/, '') : null;
 }
 
-function pickHls(links) {
-  const hls = (links || []).filter(
-    (l) => l && l.url && String(l.format || '').toLowerCase() === 'hls'
-  );
-  for (const pref of ['480', '720', '240', '1080']) {
-    const hit = hls.find((l) => String(l.quality) === pref);
-    if (hit) return hit;
-  }
-  return hls[0] || null;
-}
-
-function resolveUrl(base, relative) {
-  try {
-    return new URL(relative, base).href;
-  } catch (_) {
-    return relative;
-  }
-}
-
-/** Fetch text playlist */
-async function fetchText(url) {
-  const res = await axios.get(url, {
-    timeout: 45000,
-    responseType: 'text',
-    headers: { 'User-Agent': UA, Referer: 'https://www.pornhub.com/', Accept: '*/*' },
+/** Prefer progressive mp4 direct links (new API shape) */
+function pickDirectMp4(links) {
+  const list = (links || []).filter((l) => {
+    if (!l || !l.url) return false;
+    const fmt = String(l.format || '').toLowerCase();
+    const u = String(l.url);
+    // skip HLS playlists
+    if (fmt === 'hls' || u.includes('.m3u8')) return false;
+    return true;
   });
-  return { url, body: String(res.data || '') };
-}
 
-/** Parse m3u8 → segment URLs (or nested playlist) */
-function parseM3u8(body, baseUrl) {
-  const lines = body.split(/\r?\n/).map((l) => l.trim());
-  const segments = [];
-  let nested = null;
-  let isMaster = body.includes('#EXT-X-STREAM-INF');
+  const score = (l) => {
+    const q = String(l.quality || '').toLowerCase();
+    if (q.includes('480')) return 40;
+    if (q.includes('720')) return 30;
+    if (q.includes('240')) return 20;
+    if (q.includes('1080')) return 10;
+    return 5;
+  };
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line || line.startsWith('#')) continue;
-    const abs = resolveUrl(baseUrl, line);
-    if (isMaster && !nested) {
-      nested = abs; // first variant
-    } else if (!isMaster) {
-      segments.push(abs);
-    }
-  }
-  return { isMaster, nested, segments };
-}
-
-/**
- * Download HLS → single Buffer (MPEG-TS concat)
- * No ffmpeg — pure axios segment download
- */
-async function downloadHlsBuffer(masterUrl, onProgress) {
-  // 1) Master playlist
-  let { url: curUrl, body } = await fetchText(masterUrl);
-  let parsed = parseM3u8(body, curUrl);
-
-  // 2) Nested index if master
-  if (parsed.isMaster && parsed.nested) {
-    const idx = await fetchText(parsed.nested);
-    curUrl = idx.url;
-    body = idx.body;
-    parsed = parseM3u8(body, curUrl);
-  }
-
-  const segs = parsed.segments.slice(0, MAX_SEGMENTS);
-  if (!segs.length) {
-    throw new Error('HLS segments හොයාගන්න බැරි වුණා');
-  }
-
-  const chunks = [];
-  let total = 0;
-
-  // sequential is safer for memory + order; small concurrency
-  const CONCURRENCY = 4;
-  for (let i = 0; i < segs.length; i += CONCURRENCY) {
-    const batch = segs.slice(i, i + CONCURRENCY);
-    const parts = await Promise.all(
-      batch.map(async (segUrl) => {
-        const res = await axios.get(segUrl, {
-          responseType: 'arraybuffer',
-          timeout: 60000,
-          maxContentLength: 30 * 1024 * 1024,
-          headers: {
-            'User-Agent': UA,
-            Referer: 'https://www.pornhub.com/',
-            Accept: '*/*',
-          },
-        });
-        return Buffer.from(res.data || []);
-      })
-    );
-    for (const p of parts) {
-      chunks.push(p);
-      total += p.length;
-      if (total > MAX_WA_BYTES + 5 * 1024 * 1024) {
-        throw new Error(`File too large while downloading (${(total / 1024 / 1024).toFixed(1)} MB)`);
-      }
-    }
-    if (onProgress) {
-      try {
-        await onProgress(Math.min(i + CONCURRENCY, segs.length), segs.length, total);
-      } catch (_) {}
-    }
-  }
-
-  return Buffer.concat(chunks);
+  list.sort((a, b) => score(b) - score(a));
+  return list[0] || null;
 }
 
 async function downloadAndSend({ sock, msg, from, item }) {
   const loading = await sock.sendMessage(
     from,
-    { text: '📥 *PH download...*\n⏳ Stream buffer වෙමින්' },
+    { text: '📥 *PH process...*' },
     { quoted: msg }
   );
 
@@ -142,52 +54,38 @@ async function downloadAndSend({ sock, msg, from, item }) {
       params: { url: pageUrl },
       timeout: 90000,
       validateStatus: () => true,
+      headers: { 'User-Agent': UA },
     });
 
-    if (apiRes.status !== 200 || !apiRes.data || apiRes.data.success === false) {
-      throw new Error(apiRes.data?.message || apiRes.data?.error || `HTTP ${apiRes.status}`);
+    if (apiRes.status !== 200 || !apiRes.data) {
+      throw new Error(`API HTTP ${apiRes.status}`);
+    }
+    if (apiRes.data.success === false) {
+      throw new Error(apiRes.data.message || apiRes.data.error || 'API failed');
     }
 
     const title = apiRes.data.title || item.title || 'PH Video';
-    const links = apiRes.data.download_links || [];
-    const picked = pickHls(links);
+    const links = apiRes.data.download_links || apiRes.data.links || [];
 
+    console.log(
+      '[PH] links:',
+      links.map((l) => `${l.quality}/${l.format}`).join(', ')
+    );
+
+    const picked = pickDirectMp4(links);
     if (!picked || !picked.url) {
-      throw new Error('Download stream හොයාගන්න බැරි වුණා');
+      throw new Error(
+        'Direct MP4 URL හොයාගන්න බැරි වුණා. API links: ' +
+          (links.length ? links.map((l) => l.format || '?').join(',') : 'empty')
+      );
     }
 
-    await sock
-      .sendMessage(from, {
-        text: `⬇️ *Buffering segments...*\n🎬 ${picked.quality || ''}p\n📡 No ffmpeg — pure stream`,
-        edit: loading.key,
-      })
-      .catch(() => {});
-
-    let lastPct = -1;
-    const buffer = await downloadHlsBuffer(picked.url, async (done, total, bytes) => {
-      const pct = Math.floor((done / total) * 100);
-      if (pct >= lastPct + 20 || done === total) {
-        lastPct = pct;
-        await sock
-          .sendMessage(from, {
-            text: `⬇️ *Downloading...*\n📦 ${done}/${total} parts · ${(bytes / 1024 / 1024).toFixed(1)} MB`,
-            edit: loading.key,
-          })
-          .catch(() => {});
-      }
-    });
-
-    if (!buffer || buffer.length < 20000) {
-      throw new Error('Buffer empty / invalid');
-    }
-
-    const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
-    if (buffer.length > MAX_WA_BYTES) {
-      return sock.sendMessage(from, {
-        text: `❌ File ලොකුයි (*${sizeMB} MB*).`,
-        edit: loading.key,
-      });
-    }
+    const quality = String(picked.quality || 'auto');
+    const fileName =
+      (String(title)
+        .replace(/[\/\\:*?"<>|]/g, '')
+        .slice(0, 40)
+        .trim() || 'ph-video') + '.mp4';
 
     const caption = `
 ╭───「 🔥 *PORNHUB* 」───╮
@@ -195,26 +93,28 @@ async function downloadAndSend({ sock, msg, from, item }) {
 │  📌 *Title*    ›  ${String(title).slice(0, 60)}
 │  ⏱ *Duration* ›  ${item.duration || 'N/A'}
 │  👁 *Views*    ›  ${item.views || 'N/A'}
-│  🎬 *Quality*  ›  ${picked.quality || 'auto'}p
-│  📦 *Size*     ›  ${sizeMB} MB
+│  🎬 *Quality*  ›  ${quality}
+│
+│  📁 Document stream (low RAM)
 │
 ╰──────────────────────╯`.trim();
 
+    await sock
+      .sendMessage(from, {
+        text: `⬆️ *WhatsApp එකට upload...\n🎬 ${quality}\n📡 Direct URL stream`,
+        edit: loading.key,
+      })
+      .catch(() => {});
+
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
-    // Always document (SinhalaSub style)
-    const safeName =
-      String(title)
-        .replace(/[\/\\:*?"<>|]/g, '')
-        .slice(0, 40)
-        .trim() || 'ph-video';
-
+    // Zero-RAM style: Baileys fetches URL itself (no full buffer in our code)
     await sock.sendMessage(
       from,
       {
-        document: buffer,
+        document: { url: picked.url },
         mimetype: 'video/mp4',
-        fileName: `${safeName}.mp4`,
+        fileName,
         caption: caption + '\n\n📁 *Document*',
       },
       { quoted: msg }
@@ -299,6 +199,7 @@ module.exports = {
         params: { q: query },
         timeout: 45000,
         validateStatus: () => true,
+        headers: { 'User-Agent': UA },
       });
 
       if (res.status !== 200 || !res.data || res.data.success === false) {
