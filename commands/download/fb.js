@@ -1,5 +1,6 @@
 const axios = require('axios');
 const config = require('../../config');
+
 const API_BASE = (
   process.env.DARKQUEEN_API_URL ||
   config.darkQueenApiUrl ||
@@ -12,10 +13,12 @@ const API_KEY =
   'dq_live_FkrzHPTYIEl7gv6gTpqrWVXxJeQLrubr';
 
 const RESOLVE_PATH = '/api/facebook/video/resolve';
-const MAX_WA_BYTES = 60 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 15 * 1024 * 1024; // WhatsApp video note/message safe
+const MAX_DOC_BYTES = 64 * 1024 * 1024; // WhatsApp document practical cap
+const MAX_PROBE = 80 * 1024 * 1024;
 
 const UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 function isFbUrl(text) {
   return /facebook\.com|fb\.watch|fb\.com|fburl\.com|fb\.gg/i.test(String(text || ''));
@@ -58,146 +61,209 @@ function formatDuration(sec) {
 
 function formatSize(bytes) {
   const n = Number(bytes) || 0;
+  if (!n) return 'N/A';
+  if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
   if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(2) + ' MB';
   if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
   return n + ' B';
 }
 
-function box(title, lines) {
-  const body = lines.map((l) => `*│◊│* ${l}`).join('\n');
-  return `*╭──┉❰ ${title} ❱┉──•*
-${body}
-*│◊╰────────────┉•┉*
-*╰──────────────────┉*`;
+function looksLikeHtml(data) {
+  if (typeof data === 'string') {
+    const s = data.trim().slice(0, 80).toLowerCase();
+    return s.startsWith('<!doctype') || s.startsWith('<html') || s.includes('run this app');
+  }
+  return false;
 }
 
-function pickDirectUrl(data) {
-  if (!data || typeof data !== 'object') return null;
-  const inner = data.data && typeof data.data === 'object' ? data.data : data;
-  const candidates = [
-    inner.directUrl,
-    inner.direct_url,
-    inner.hd,
-    inner.sd,
-    inner.video,
-    inner.videoUrl,
-    inner.video_url,
-    inner.url,
-    inner.download,
-    inner.download_url,
-    inner.link,
-    data.directUrl,
-    data.result?.directUrl,
-    data.result?.hd,
-    data.result?.sd,
-    data.result?.url,
-    data.data?.directUrl,
-  ];
-  for (const c of candidates) {
-    if (typeof c === 'string' && /^https?:\/\//i.test(c)) return c;
+function parseBody(data) {
+  if (data == null) return null;
+  if (typeof data === 'object') return data;
+  if (typeof data === 'string') {
+    const t = data.trim();
+    if (t.startsWith('{') || t.startsWith('[')) {
+      try {
+        return JSON.parse(t);
+      } catch {
+        return null;
+      }
+    }
   }
   return null;
 }
 
-async function resolveFacebook(url) {
-  const endpoint = `${API_BASE}${RESOLVE_PATH}`;
-  const res = await axios.post(
-    endpoint,
-    { url },
-    {
-      timeout: 90000,
-      validateStatus: () => true,
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': API_KEY,
-        Accept: 'application/json',
-        'User-Agent': UA,
-      },
+function pickDirectUrl(data) {
+  if (!data || typeof data !== 'object') return null;
+  const layer =
+    (data.data && typeof data.data === 'object' ? data.data : null) ||
+    (data.result && typeof data.result === 'object' ? data.result : null) ||
+    data;
+  const keys = ['directUrl', 'direct_url', 'hd', 'sd', 'videoUrl', 'video_url', 'url', 'download'];
+  for (const k of keys) {
+    const v = layer[k];
+    if (typeof v === 'string' && /^https?:\/\//i.test(v) && /fbcdn\.net|\.mp4|video/i.test(v)) {
+      return v;
     }
-  );
+    if (typeof v === 'string' && /^https?:\/\//i.test(v) && !/\.(jpg|png|webp|gif)(\?|$)/i.test(v)) {
+      return v;
+    }
+  }
+  if (typeof data.directUrl === 'string') return data.directUrl;
+  return null;
+}
 
-  const data = res.data;
+function pickMeta(data) {
+  const layer =
+    (data?.data && typeof data.data === 'object' ? data.data : null) ||
+    (data?.result && typeof data.result === 'object' ? data.result : null) ||
+    data ||
+    {};
+  return {
+    title: layer.title || data?.title || 'Facebook Video',
+    uploader: layer.uploader || layer.author || data?.uploader || 'Unknown',
+    thumbnail: layer.thumbnail || layer.thumb || data?.thumbnail || null,
+    durationSeconds: layer.durationSeconds || layer.duration || data?.durationSeconds || null,
+  };
+}
+
+async function callDarkQueenOnce(url) {
+  const endpoint = `${API_BASE}${RESOLVE_PATH}`;
+  let res;
+  try {
+    res = await axios.post(
+      endpoint,
+      { url },
+      {
+        timeout: 90000,
+        validateStatus: () => true,
+        headers: {
+          'content-type': 'application/json',
+          Accept: 'application/json',
+          'x-api-key': API_KEY,
+          'User-Agent': UA,
+        },
+      }
+    );
+  } catch (e) {
+    const err = new Error(`API connect fail: ${e.message}`);
+    err.code = 'API_DOWN';
+    throw err;
+  }
+
+  if (looksLikeHtml(res.data) || String(res.headers?.['content-type'] || '').includes('text/html')) {
+    const err = new Error('Dark Queen API offline / Replit stop වෙලා');
+    err.code = 'API_DOWN';
+    throw err;
+  }
+
+  const data = parseBody(res.data);
+  if (!data) {
+    const err = new Error(`API JSON නෙවෙයි (HTTP ${res.status})`);
+    err.code = 'API';
+    throw err;
+  }
   if (res.status === 401 || res.status === 403) {
-    const err = new Error(data?.error || 'API key invalid / unauthorized');
+    const err = new Error(data.error || 'API key invalid');
     err.code = 'AUTH';
     throw err;
   }
-  if (res.status === 400) {
-    const err = new Error(data?.error || 'Invalid Facebook URL');
-    err.code = 'BAD_URL';
-    throw err;
-  }
-  if (res.status !== 200 || !data || typeof data !== 'object') {
-    const err = new Error(data?.error || data?.message || `API HTTP ${res.status}`);
-    err.code = 'API';
-    throw err;
-  }
-  if (data.success === false || data.status === false) {
+  if (data.error || data.success === false || data.status === false) {
     const err = new Error(data.error || data.message || data.msg || 'Resolve failed');
-    err.code = 'API';
+    err.code = res.status === 400 ? 'BAD_URL' : 'API';
     throw err;
   }
 
   const videoUrl = pickDirectUrl(data);
   if (!videoUrl) {
-    const err = new Error('Video link හොයාගන්න බැරි වුණා');
+    const err = new Error('API response එකේ directUrl නැහැ');
     err.code = 'NO_MEDIA';
     throw err;
   }
-
-  const inner = data.data && typeof data.data === 'object' ? data.data : data;
-  return {
-    videoUrl,
-    title: inner.title || data.title || 'Facebook Video',
-    uploader: inner.uploader || inner.author || data.uploader || 'Unknown',
-    thumbnail: inner.thumbnail || inner.thumb || data.thumbnail || null,
-    durationSeconds: inner.durationSeconds || inner.duration || data.durationSeconds || null,
-    expiresAt: inner.expiresAt || data.expiresAt || null,
-  };
+  return { ...pickMeta(data), videoUrl };
 }
 
-async function downloadVideo(videoUrl) {
+async function probeSize(videoUrl) {
+  try {
+    const head = await axios.head(videoUrl, {
+      timeout: 20000,
+      maxRedirects: 5,
+      validateStatus: () => true,
+      headers: { 'User-Agent': UA, Referer: 'https://www.facebook.com/' },
+    });
+    const n = parseInt(head.headers?.['content-length'] || '0', 10);
+    if (head.status < 400 && n > 0) return n;
+  } catch {
+    /* ignore */
+  }
+  try {
+    const rng = await axios.get(videoUrl, {
+      timeout: 20000,
+      maxRedirects: 5,
+      validateStatus: () => true,
+      headers: {
+        'User-Agent': UA,
+        Referer: 'https://www.facebook.com/',
+        Range: 'bytes=0-0',
+      },
+    });
+    const cr = String(rng.headers?.['content-range'] || '');
+    const m = cr.match(/\/(\d+)\s*$/);
+    if (m) return parseInt(m[1], 10);
+    const n = parseInt(rng.headers?.['content-length'] || '0', 10);
+    if (n > 1) return n;
+  } catch {
+    /* ignore */
+  }
+  return 0;
+}
+
+async function downloadLimited(videoUrl, maxBytes) {
   const res = await axios.get(videoUrl, {
     responseType: 'arraybuffer',
     timeout: 180000,
-    maxContentLength: MAX_WA_BYTES + 8 * 1024 * 1024,
-    maxBodyLength: MAX_WA_BYTES + 8 * 1024 * 1024,
+    maxContentLength: maxBytes + 1024 * 1024,
+    maxBodyLength: maxBytes + 1024 * 1024,
     maxRedirects: 8,
     validateStatus: () => true,
     headers: {
       'User-Agent': UA,
       Accept: '*/*',
       Referer: 'https://www.facebook.com/',
-      Origin: 'https://www.facebook.com',
     },
   });
-
-  const contentType = String(res.headers?.['content-type'] || '').toLowerCase();
-  if (
-    res.status !== 200 ||
-    contentType.includes('text/html') ||
-    contentType.includes('application/json')
-  ) {
-    const err = new Error('Video file ලබාගන්න බැරි වුණා (link expired / blocked)');
-    err.code = 'DL';
-    throw err;
+  const ct = String(res.headers?.['content-type'] || '').toLowerCase();
+  if ((res.status !== 200 && res.status !== 206) || ct.includes('text/html')) {
+    throw new Error(`CDN HTTP ${res.status}`);
   }
-
   const buffer = Buffer.from(res.data || []);
-  if (!buffer.length || buffer.length < 5000) {
-    const err = new Error('Video file එක empty / invalid');
-    err.code = 'DL';
-    throw err;
-  }
-  return { buffer, contentType };
+  if (buffer.length < 5000) throw new Error('Video empty');
+  return buffer;
 }
 
 async function safeEdit(sock, from, key, text) {
   try {
     await sock.sendMessage(from, { text, edit: key });
   } catch {
-    /* edit not supported */
+    /* ignore */
   }
+}
+
+function infoCaption(info, sizeBytes, extra) {
+  return `
+*╭─┉❰ 🌸 𝐅𝐀𝐂𝐄𝐁𝐎𝐎𝐊 𝐃𝐋 🌸 ❱┉─┉──•*
+*│ 💙 Video details*
+*╰┉────────────┉─•*
+
+*╭──┉❰ 🎬 𝐈𝐍𝐅𝐎 ❱┉──•*
+*│◊│* ✦ 📌 \`ᴛɪᴛʟᴇ\` : ${String(info.title || 'Facebook Video').slice(0, 80)}
+*│◊│* ✦ 👤 \`ᴜᴘʟᴏᴀᴅᴇʀ\` : ${String(info.uploader || 'Unknown').slice(0, 40)}
+*│◊│* ✦ ⏱️ \`ᴅᴜʀᴀᴛɪᴏɴ\` : ${formatDuration(info.durationSeconds)}
+*│◊│* ✦ 📦 \`ꜱɪᴢᴇ\` : ${formatSize(sizeBytes)}
+*│◊│* ✦ ✅ \`ꜱᴛᴀᴛᴜꜱ\` : ${extra || 'Success'}
+*│◊╰────────────┉•┉*
+*╰──────────────────┉*
+
+_*🌟✦•°💙↝❰💖 ${config.botName || 'DARK QUEEN MINI'} ❱*_`.trim();
 }
 
 module.exports = {
@@ -208,40 +274,23 @@ module.exports = {
 
   async execute({ sock, msg, from, args }) {
     const prefix = config.prefix || '.';
-    const rawArgs = args.join(' ').trim();
-    const quoted = getQuotedText(msg);
-    const raw = rawArgs || quoted;
+    const raw = args.join(' ').trim() || getQuotedText(msg);
     const url = extractUrl(raw) || (isFbUrl(raw) ? raw : null);
 
     if (!raw || !url) {
-      const help = `
-*╭─┉❰ 🌸 𝐖𝙴𝙻𝙲𝙾𝙼𝙴 𝐔𝚂𝙴𝚁 🌸 ❱┉─┉──•*
-*│ 💙 𝐅𝐀𝐂𝐄𝐁𝐎𝐎𝐊 𝐕𝐈𝐃𝐄𝐎 𝐃𝐋*
-*╰┉────────────┉─•*
-
-*╭──┉❰ 💎 𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄 ❱┉──•*
+      return sock.sendMessage(
+        from,
+        {
+          text: `
+*╭─┉❰ 💙 𝐅𝐀𝐂𝐄𝐁𝐎𝐎𝐊 𝐃𝐋 ❱┉─┉──•*
 *│◊│* ✦ \`${prefix}fb <facebook link>\`
 *│◊│* ✦ Reply link එකකට \`${prefix}fb\`
+*│◊│* ✦ Example: \`${prefix}fb https://fb.watch/xxxxx\`
 *│◊╰────────────┉•┉*
-*╰──────────────────┉*
-
-*╭──┉❰ 📌 𝐄𝐗𝐀𝐌𝐏𝐋𝐄 ❱┉──•*
-*│◊│* ✦ \`${prefix}fb https://fb.watch/xxxxx\`
-*│◊│* ✦ \`${prefix}fb https://www.facebook.com/share/v/...\`
-*│◊│* ✦ \`${prefix}facebook https://www.facebook.com/reel/...\`
-*│◊╰────────────┉•┉*
-*╰──────────────────┉*
-
-*╭──┉❰ ✅ 𝐒𝐔𝐏𝐏𝐎𝐑𝐓𝐒 ❱┉──•*
-*│◊│* ✦ 🎬 Facebook Videos
-*│◊│* ✦ 🌸 Facebook Reels
-*│◊│* ✦ 🔗 fb.watch / share links
-*│◊│* ✦ 📱 m.facebook.com links
-*│◊╰────────────┉•┉*
-*╰──────────────────┉*
-
-_*🌟✦•°💙↝❰💖 Powered by Dark Queen ❱*_`;
-      return sock.sendMessage(from, { text: help.trim() }, { quoted: msg });
+*╰──────────────────┉*`.trim(),
+        },
+        { quoted: msg }
+      );
     }
 
     const loading = await sock.sendMessage(
@@ -249,8 +298,8 @@ _*🌟✦•°💙↝❰💖 Powered by Dark Queen ❱*_`;
       {
         text: `
 *╭──┉❰ 💙 𝐅𝐀𝐂𝐄𝐁𝐎𝐎𝐊 ❱┉──•*
-*│◊│* ✦ 🔍 Link check කරමින්...
-*│◊│* ✦ ⏳ Please wait
+*│◊│* ✦ 📡 Resolve කරමින්...
+*│◊│* ✦ 🪙 API call එකක් විතරයි
 *│◊╰────────────┉•┉*
 *╰──────────────────┉*`.trim(),
       },
@@ -258,19 +307,8 @@ _*🌟✦•°💙↝❰💖 Powered by Dark Queen ❱*_`;
     );
 
     try {
-      await safeEdit(
-        sock,
-        from,
-        loading.key,
-        `
-*╭──┉❰ 💙 𝐅𝐀𝐂𝐄𝐁𝐎𝐎𝐊 ❱┉──•*
-*│◊│* ✦ 📡 API එකට connect වෙමින්...
-*│◊│* ✦ 💎 Dark Queen Resolve
-*│◊╰────────────┉•┉*
-*╰──────────────────┉*`.trim()
-      );
-
-      const info = await resolveFacebook(url);
+      // ONE resolve only — this is what costs coins
+      const info = await callDarkQueenOnce(url);
 
       await safeEdit(
         sock,
@@ -278,87 +316,96 @@ _*🌟✦•°💙↝❰💖 Powered by Dark Queen ❱*_`;
         loading.key,
         `
 *╭──┉❰ 💙 𝐅𝐀𝐂𝐄𝐁𝐎𝐎𝐊 ❱┉──•*
-*│◊│* ✦ ⬇️ Video download වෙමින්...
-*│◊│* ✦ 🎬 ${String(info.title).slice(0, 42)}
-*│◊│* ✦ 👤 ${String(info.uploader).slice(0, 28)}
+*│◊│* ✦ ✅ Resolve උනා
+*│◊│* ✦ 📏 Size check...
 *│◊╰────────────┉•┉*
 *╰──────────────────┉*`.trim()
       );
 
-      const { buffer } = await downloadVideo(info.videoUrl);
-      const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
+      const sizeBytes = await probeSize(info.videoUrl);
+      const sizeLabel = formatSize(sizeBytes);
 
-      if (buffer.length > MAX_WA_BYTES) {
-        return sock.sendMessage(from, {
-          text: box('⚠️ 𝐅𝐈𝐋𝐄 𝐓𝐎𝐎 𝐋𝐀𝐑𝐆𝐄', [
-            `✦ 📦 Size › *${sizeMB} MB*`,
-            '✦ 🚫 WhatsApp limit ~60MB',
-            '✦ 💡 කෙටි / SD video එකක් try කරන්න',
-          ]),
-          edit: loading.key,
-        });
-      }
-
-      const caption = `
-*╭─┉❰ 🌸 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐃𝐎𝐍𝐄 🌸 ❱┉─┉──•*
-*│ 💙 Facebook Video Ready*
+      // Too big for WhatsApp: do NOT download, still give value for the coin
+      if (sizeBytes > MAX_DOC_BYTES) {
+        const cap = `
+*╭─┉❰ ⚠️ 𝐅𝐈𝐋𝐄 𝐋𝐀𝐑𝐆𝐄 ❱┉─┉──•*
+*│ 💙 WhatsApp එකට attach කරන්න බෑ*
 *╰┉────────────┉─•*
 
-*╭──┉❰ 🎬 𝐕𝐈𝐃𝐄𝐎 𝐈𝐍𝐅𝐎 ❱┉──•*
-*│◊│* ✦ 📌 \`ᴛɪᴛʟᴇ\` : ${String(info.title).slice(0, 80)}
-*│◊│* ✦ 👤 \`ᴜᴘʟᴏᴀᴅᴇʀ\` : ${String(info.uploader).slice(0, 40)}
-*│◊│* ✦ ⏱️ \`ᴅᴜʀᴀᴛɪᴏɴ\` : ${formatDuration(info.durationSeconds)}
-*│◊│* ✦ 📦 \`ꜱɪᴢᴇ\` : ${sizeMB} MB
-*│◊│* ✦ 📡 \`ꜱᴏᴜʀᴄᴇ\` : Facebook
-*│◊│* ✦ ✅ \`ꜱᴛᴀᴛᴜꜱ\` : Success
-*│◊╰────────────┉•┉*
-*╰──────────────────┉*
-
-_*🌟✦•°💙↝❰💖 ${config.botName || 'DARK QUEEN MINI'} ❱*_`.trim();
-
-      await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
-
-      const payload = {
-        video: buffer,
-        mimetype: 'video/mp4',
-        caption,
-        fileName: 'facebook.mp4',
-      };
-
-      try {
-        await sock.sendMessage(from, payload, { quoted: msg });
-      } catch (sendErr) {
-        console.error('FB video send failed, document fallback:', sendErr.message);
-        await sock.sendMessage(
-          from,
-          {
-            document: buffer,
-            mimetype: 'video/mp4',
-            fileName: 'facebook.mp4',
-            caption: caption + '\n\n*│◊│* ✦ 📁 Sent as document',
-          },
-          { quoted: msg }
-        );
-      }
-    } catch (err) {
-      console.error('FB Download Error:', err.message);
-      const hint =
-        err.code === 'AUTH'
-          ? '🔑 API key එක check කරන්න (DARKQUEEN_API_KEY)'
-          : err.code === 'BAD_URL'
-            ? '🔗 Public Facebook video/reel link එකක් දෙන්න'
-            : err.code === 'NO_MEDIA'
-              ? '🔒 Private / region-lock video එකක් වෙන්න පුළුවන්'
-              : '💡 ටිකකින් ආයෙත් try කරන්න';
-
-      const failText = `
-*╭──┉❰ ❌ 𝐅𝐁 𝐃𝐋 𝐅𝐀𝐈𝐋𝐄𝐃 ❱┉──•*
-*│◊│* ✦ ⚠️ ${String(err.message).slice(0, 90)}
-*│◊│* ✦ ${hint}
-*│◊│* ✦ 📌 \`${prefix}fb <facebook link>\`
+*╭──┉❰ 🎬 𝐈𝐍𝐅𝐎 ❱┉──•*
+*│◊│* ✦ 📌 \`${String(info.title || 'Facebook Video').slice(0, 70)}\`
+*│◊│* ✦ 👤 ${String(info.uploader || 'Unknown').slice(0, 36)}
+*│◊│* ✦ ⏱️ ${formatDuration(info.durationSeconds)}
+*│◊│* ✦ 📦 ${sizeLabel}  (limit ~64MB)
+*│◊│* ✦ 💡 කෙටි reel / SD video එකක් try කරන්න
 *│◊╰────────────┉•┉*
 *╰──────────────────┉*`.trim();
 
+        await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
+        if (info.thumbnail && /^https?:\/\//i.test(info.thumbnail)) {
+          try {
+            await sock.sendMessage(from, { image: { url: info.thumbnail }, caption: cap }, { quoted: msg });
+            return;
+          } catch {
+            /* fall through */
+          }
+        }
+        await sock.sendMessage(from, { text: cap }, { quoted: msg });
+        return;
+      }
+
+      await safeEdit(
+        sock,
+        from,
+        loading.key,
+        `
+*╭──┉❰ 💙 𝐅𝐀𝐂𝐄𝐁𝐎𝐎𝐊 ❱┉──•*
+*│◊│* ✦ ⬇️ Download ${sizeLabel || ''}
+*│◊│* ✦ 🎬 ${String(info.title).slice(0, 36)}
+*│◊╰────────────┉•┉*
+*╰──────────────────┉*`.trim()
+      );
+
+      const limit = sizeBytes && sizeBytes <= MAX_VIDEO_BYTES ? MAX_VIDEO_BYTES : MAX_DOC_BYTES;
+      const buffer = await downloadLimited(info.videoUrl, Math.min(limit, MAX_PROBE));
+      const finalSize = buffer.length;
+      const asVideo = finalSize <= MAX_VIDEO_BYTES;
+      const caption = infoCaption(info, finalSize, asVideo ? 'Video' : 'Document');
+
+      await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
+
+      if (asVideo) {
+        try {
+          await sock.sendMessage(
+            from,
+            { video: buffer, mimetype: 'video/mp4', caption, fileName: 'facebook.mp4' },
+            { quoted: msg }
+          );
+          return;
+        } catch (e) {
+          console.error('[FB] video send fail:', e.message);
+        }
+      }
+
+      await sock.sendMessage(
+        from,
+        {
+          document: buffer,
+          mimetype: 'video/mp4',
+          fileName: 'facebook.mp4',
+          caption,
+        },
+        { quoted: msg }
+      );
+    } catch (err) {
+      console.error('FB Download Error:', err.message);
+      const failText = `
+*╭──┉❰ ❌ 𝐅𝐁 𝐃𝐋 𝐅𝐀𝐈𝐋𝐄𝐃 ❱┉──•*
+*│◊│* ✦ ⚠️ ${String(err.message).slice(0, 110)}
+*│◊│* ✦ 🪙 Resolve උනොත් coin කැපිලා තියෙන්න පුළුවන්
+*│◊│* ✦ 📌 \`${prefix}fb <facebook link>\`
+*│◊╰────────────┉•┉*
+*╰──────────────────┉*`.trim();
       await sock
         .sendMessage(from, { text: failText, edit: loading.key })
         .catch(() => sock.sendMessage(from, { text: failText }, { quoted: msg }).catch(() => {}));
