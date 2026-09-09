@@ -5,6 +5,8 @@ const API_KEY = 'chama_api_4e25afe0832134994a30b44dd0e9d6d8';
 const SEARCH_API = 'https://api.chamindu.site/api/v1/movie/dinkamovies/search';
 const INFO_API = 'https://api.chamindu.site/api/v1/movie/dinkamovies/info';
 const PENDING_TTL_MS = 3 * 60 * 1000;
+const FOOTER = 'DARK QUEEN OFC';
+const BOT_FANCY = '𝕯𝕬𝕽𝕶 𝕼𝖀𝕰𝕰𝕹 𝕸𝕴𝕹𝕴';
 
 const pending = new Map();
 
@@ -18,51 +20,101 @@ function extractDinkaUrl(text) {
   return m ? m[0].replace(/[)\]>,.]+$/, '') : null;
 }
 
-/** Pixeldrain /u/ID → api direct file URL */
+/** Extract Google Drive file ID */
+function gdriveId(url) {
+  if (!url) return null;
+  const s = String(url);
+  let m = s.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  m = s.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  m = s.match(/\/open\?id=([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  return null;
+}
+
+/** Convert any host link → Baileys-friendly direct URL */
 function toDirectFileUrl(link) {
   if (!link || typeof link !== 'string') return null;
-  const u = link.trim();
+  let u = link.trim();
+  if (!/^https?:\/\//i.test(u)) return null;
 
-  // already api file
+  // skip chat bots
+  if (/wa\.me|t\.me|telegram|whatsapp/i.test(u)) return null;
+
+  // Pixeldrain /u/ID → api file
+  const pd = u.match(/pixeldrain\.com\/u\/([a-zA-Z0-9]+)/i);
+  if (pd) return `https://pixeldrain.com/api/file/${pd[1]}?download`;
+
   if (/pixeldrain\.com\/api\/file\//i.test(u)) {
     return u.includes('download') ? u : u.replace(/\/?$/, '') + '?download';
   }
 
-  // https://pixeldrain.com/u/XXXX
-  const m = u.match(/pixeldrain\.com\/u\/([a-zA-Z0-9]+)/i);
-  if (m) {
-    return `https://pixeldrain.com/api/file/${m[1]}?download`;
+  // Google Drive → direct export
+  const gid = gdriveId(u);
+  if (gid) {
+    return `https://drive.google.com/uc?export=download&id=${gid}&confirm=t`;
   }
 
-  // gdrive / other direct-ish
-  if (/^https?:\/\//i.test(u) && !/wa\.me|t\.me|telegram/i.test(u)) {
-    return u;
+  // R2 / CDN / portal / other https — use as-is
+  return u;
+}
+
+function hostLabel(url) {
+  const u = String(url || '').toLowerCase();
+  if (u.includes('pixeldrain')) return '📦 Pixeldrain';
+  if (u.includes('drive.google')) return '☁ Google Drive';
+  if (u.includes('r2.dev')) return '⚡ R2 CDN';
+  if (u.includes('dinkamovieslk')) return '🌐 Dinka Portal';
+  try {
+    return '🔗 ' + new URL(url).hostname.replace(/^www\./, '');
+  } catch (_) {
+    return '🔗 Link';
   }
-  return null;
+}
+
+function cleanQuality(q) {
+  return String(q || 'Download')
+    .replace(/📥|⬇|🔗/g, '')
+    .replace(/\s+/g, ' ')
+    .trim() || 'Download';
 }
 
 function normalizeDownloads(list) {
   if (!Array.isArray(list)) return [];
   const out = [];
+
   for (const d of list) {
-    const raw =
-      d.direct_link ||
-      d.gdrive_link ||
-      d.link ||
-      d.url ||
-      d.download ||
-      null;
-    const direct = toDirectFileUrl(raw);
+    const candidates = [
+      d.direct_link,
+      d.gdrive_link,
+      d.link,
+      d.url,
+      d.download,
+      d.portal_link,
+    ];
+
+    let direct = null;
+    let raw = null;
+    for (const c of candidates) {
+      const resolved = toDirectFileUrl(c);
+      if (resolved) {
+        direct = resolved;
+        raw = c;
+        break;
+      }
+    }
     if (!direct) continue;
+
     out.push({
-      quality: d.quality || d.label || 'Download',
-      size: d.size || 'N/A',
-      type: d.type || 'File',
+      quality: cleanQuality(d.quality || d.label || d.name),
+      size: d.size && String(d.size).toUpperCase() !== 'N/A' ? String(d.size) : 'N/A',
+      type: d.type || hostLabel(direct),
       url: direct,
       raw,
     });
   }
-  // unique by url
+
   const seen = new Set();
   return out.filter((x) => {
     if (seen.has(x.url)) return false;
@@ -78,6 +130,10 @@ function setPending(from, state) {
   pending.set(from, state);
 }
 
+function foot() {
+  return `\n> ✦ ${FOOTER} ✦\n_*✰┈ ${BOT_FANCY} ┈✰*_`;
+}
+
 async function fetchInfo(pageUrl) {
   const res = await axios.get(INFO_API, {
     params: { url: pageUrl, api_key: API_KEY },
@@ -85,20 +141,17 @@ async function fetchInfo(pageUrl) {
     validateStatus: () => true,
     headers: { 'User-Agent': UA },
   });
-  if (res.status !== 200 || !res.data) {
-    throw new Error(`Info HTTP ${res.status}`);
-  }
+  if (res.status !== 200 || !res.data) throw new Error(`Info HTTP ${res.status}`);
   if (res.data.status === false || res.data.success === false) {
     throw new Error(res.data.error || res.data.message || 'Info failed');
   }
-  const data = res.data.data || res.data.result || res.data;
-  return data;
+  return res.data.data || res.data.result || res.data;
 }
 
 async function showQualities({ sock, msg, from, item }) {
   const loading = await sock.sendMessage(
     from,
-    { text: '🎬✨ *Movie info ලබාගනිමින්...*' },
+    { text: '🎬✨ *𝐌𝐨𝐯𝐢𝐞 𝐢𝐧𝐟𝐨 𝐥𝐨𝐚𝐝𝐢𝐧𝐠...*' },
     { quoted: msg }
   );
 
@@ -111,7 +164,7 @@ async function showQualities({ sock, msg, from, item }) {
 
     if (!downloads.length) {
       return sock.sendMessage(from, {
-        text: '❌😥 Downloadable links හමු නොවීය.\n💡 වෙන movie එකක් try කරන්න.',
+        text: '❌😥 *𝐃𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐥𝐢𝐧𝐤𝐬 𝐧𝐨𝐭 𝐟𝐨𝐮𝐧𝐝*' + foot(),
         edit: loading.key,
       });
     }
@@ -126,20 +179,22 @@ async function showQualities({ sock, msg, from, item }) {
     });
 
     let list =
-      `╭───「 🎥🍿 *DINKA MOVIES* 」───╮\n│\n` +
-      `│  📌 *Title*  ›  ${String(title).slice(0, 55)}\n` +
-      `│  📅 *Year*   ›  ${year}\n` +
-      `│  📦 *Files*  ›  ${downloads.length}\n│\n` +
-      `│  📥 *Quality තෝරන්න:*\n│\n`;
+      `╭───「 🎥🍿 *𝐃𝐈𝐍𝐊𝐀 𝐌𝐎𝐕𝐈𝐄𝐒* 」───╮\n│\n` +
+      `│  📌 *𝐓𝐢𝐭𝐥𝐞*  ›  ${String(title).slice(0, 52)}\n` +
+      `│  📅 *𝐘𝐞𝐚𝐫*   ›  ${year}\n` +
+      `│  📦 *𝐅𝐢𝐥𝐞𝐬*  ›  ${downloads.length}\n│\n` +
+      `│  📥 *𝐐𝐮𝐚𝐥𝐢𝐭𝐲 𝐬𝐞𝐥𝐞𝐜𝐭:*\n│\n`;
 
     downloads.forEach((d, i) => {
       list += `│  *${i + 1}.* ${d.quality}\n`;
-      list += `│      💾 ${d.size} · 🏷️ ${d.type}\n`;
+      list += `│      💾 ${d.size} · ${d.type}\n`;
     });
 
-    list += `\n│  👇 *${config.prefix || '.'}dinka <number>*\n`;
-    list += `│  ⏳ 3 min · 📡 DARK QUEEN OFC\n`;
-    list += `╰──────────────────────╯`;
+    list +=
+      `\n│  👇 *${config.prefix || '.'}dinka <number>*\n` +
+      `│  ⏳ 3 𝐦𝐢𝐧 · 📡 𝐳𝐞𝐫𝐨-𝐑𝐀𝐌\n` +
+      `╰──────────────────────╯` +
+      foot();
 
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
@@ -155,10 +210,10 @@ async function showQualities({ sock, msg, from, item }) {
     }
     await sock.sendMessage(from, { text: list }, { quoted: msg });
   } catch (err) {
-    console.error('Dinka info error:', err.message);
+    console.error('Dinka info:', err.message);
     await sock
       .sendMessage(from, {
-        text: `❌💥 \`${err.message}\``,
+        text: `❌💥 \`${err.message}\`` + foot(),
         edit: loading.key,
       })
       .catch(() => {});
@@ -169,23 +224,21 @@ async function sendDocument({ sock, msg, from, quality, title, poster }) {
   const loading = await sock.sendMessage(
     from,
     {
-      text: `⬆️📡 *Document stream...*\n🎬 ${quality.quality}\n💾 ${quality.size}`,
+      text: `⬆️📡 *𝐃𝐨𝐜𝐮𝐦𝐞𝐧𝐭 𝐬𝐭𝐫𝐞𝐚𝐦...*\n🎬 ${quality.quality}\n💾 ${quality.size}`,
     },
     { quoted: msg }
   );
 
   try {
-    const caption = `
-╭───「 🎬✨ *DINKA* 」───╮
-│
-│  📌 *Title*   ›  ${String(title).slice(0, 55)}
-│  🎥 *Quality* ›  ${quality.quality}
-│  💾 *Size*    ›  ${quality.size}
-│  🏷️ *Host*    ›  ${quality.type}
-│  📁 *Type*    ›  Document
-│
-╰──────────────────────╯
-📡 *𝐷𝐴𝑅𝐾 𝑄𝑈𝐸𝐸𝑁 · 𝑂𝐹𝐶*`.trim();
+    const caption =
+      `╭───「 🎬✨ *𝐃𝐈𝐍𝐊𝐀* 」───╮\n│\n` +
+      `│  📌 *𝐓𝐢𝐭𝐥𝐞*   ›  ${String(title).slice(0, 52)}\n` +
+      `│  🎥 *𝐐𝐮𝐚𝐥𝐢𝐭𝐲* ›  ${quality.quality}\n` +
+      `│  💾 *𝐒𝐢𝐳𝐞*    ›  ${quality.size}\n` +
+      `│  🏷️ *𝐇𝐨𝐬𝐭*    ›  ${quality.type}\n` +
+      `│  📁 *𝐓𝐲𝐩𝐞*    ›  Document\n│\n` +
+      `╰──────────────────────╯` +
+      foot();
 
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
@@ -203,22 +256,25 @@ async function sendDocument({ sock, msg, from, quality, title, poster }) {
       (String(title).replace(/[\/\\:*?"<>|]/g, '').slice(0, 40).trim() || 'dinka') +
       '.mp4';
 
-    // Cinesubz style — Baileys downloads from URL (no local buffer)
+    // Zero-RAM: Baileys pulls URL (GDrive / Pixeldrain / R2)
     await sock.sendMessage(
       from,
       {
         document: { url: quality.url },
         mimetype: 'video/mp4',
         fileName,
-        caption: `📁🎬 *${quality.quality}*`,
+        caption: `📁🎬 *${quality.quality}*\n> ✦ ${FOOTER} ✦`,
       },
       { quoted: msg }
     );
   } catch (err) {
-    console.error('Dinka send error:', err.message);
+    console.error('Dinka send:', err.message);
     await sock
       .sendMessage(from, {
-        text: `❌💥 Upload fail.\n\n\`${err.message}\``,
+        text:
+          `❌💥 *𝐔𝐩𝐥𝐨𝐚𝐝 𝐟𝐚𝐢𝐥*\n\n\`${err.message}\`\n\n` +
+          `💡 GDrive virus-scan page නම් fail වෙන්න පුළුවන්.` +
+          foot(),
         edit: loading.key,
       })
       .catch(() => {});
@@ -234,7 +290,6 @@ module.exports = {
   async execute({ sock, msg, from, args }) {
     const prefix = config.prefix || '.';
 
-    // number reply
     if (args.length === 1 && /^\d+$/.test(args[0])) {
       const idx = parseInt(args[0], 10) - 1;
       const state = pending.get(from);
@@ -243,7 +298,7 @@ module.exports = {
         if (idx < 0 || idx >= state.downloads.length) {
           return sock.sendMessage(
             from,
-            { text: `❌ *1*–*${state.downloads.length}* තෝරන්න 🙏` },
+            { text: `❌ *1*–*${state.downloads.length}* 𝐬𝐞𝐥𝐞𝐜𝐭 🙏` + foot() },
             { quoted: msg }
           );
         }
@@ -264,18 +319,17 @@ module.exports = {
         if (idx < 0 || idx >= state.results.length) {
           return sock.sendMessage(
             from,
-            { text: `❌ *1*–*${state.results.length}* තෝරන්න 🙏` },
+            { text: `❌ *1*–*${state.results.length}* 𝐬𝐞𝐥𝐞𝐜𝐭 🙏` + foot() },
             { quoted: msg }
           );
         }
-        const item = state.results[idx];
-        return showQualities({ sock, msg, from, item });
+        return showQualities({ sock, msg, from, item: state.results[idx] });
       }
 
       return sock.sendMessage(
         from,
         {
-          text: `❌ Active search නැහැ 😅\n💡 \`${prefix}dinka <movie name>\``,
+          text: `❌ Active search නැහැ 😅\n💡 \`${prefix}dinka <movie>\`` + foot(),
         },
         { quoted: msg }
       );
@@ -285,19 +339,17 @@ module.exports = {
       return sock.sendMessage(
         from,
         {
-          text: `╭───「 🎥🍿 *DINKA MOVIES* 」───╮
-│
-│  ${prefix}dinka <movie name>
-│  ${prefix}dinka <number>
-│  ${prefix}dinka <dinka url>
-│
-│  📌 Example:
-│  ${prefix}dinka Gamani
-│  ${prefix}dinka 1
-│
-│  📡 DARK QUEEN MINI OFC
-│
-╰──────────────────────╯`,
+          text:
+            `╭───「 🎥🍿 *𝐃𝐈𝐍𝐊𝐀 𝐌𝐎𝐕𝐈𝐄𝐒* 」───╮\n│\n` +
+            `│  ${prefix}dinka <movie name>\n` +
+            `│  ${prefix}dinka <number>\n` +
+            `│  ${prefix}dinka <dinka url>\n│\n` +
+            `│  📌 Example:\n` +
+            `│  ${prefix}dinka Gamani\n` +
+            `│  ${prefix}dinka 1\n│\n` +
+            `│  📡 Zero-RAM · GDrive / PD / R2\n` +
+            `╰──────────────────────╯` +
+            foot(),
         },
         { quoted: msg }
       );
@@ -316,7 +368,7 @@ module.exports = {
 
     const loading = await sock.sendMessage(
       from,
-      { text: '🔍✨ *Dinka search...*' },
+      { text: '🔍✨ *𝐃𝐢𝐧𝐤𝐚 𝐬𝐞𝐚𝐫𝐜𝐡...*' },
       { quoted: msg }
     );
 
@@ -330,13 +382,13 @@ module.exports = {
 
       if (res.status !== 200 || !res.data) {
         return sock.sendMessage(from, {
-          text: `❌ Search HTTP ${res.status}`,
+          text: `❌ Search HTTP ${res.status}` + foot(),
           edit: loading.key,
         });
       }
       if (res.data.status === false || res.data.success === false) {
         return sock.sendMessage(from, {
-          text: `❌ \`${res.data.error || res.data.message || 'fail'}\``,
+          text: `❌ \`${res.data.error || res.data.message || 'fail'}\`` + foot(),
           edit: loading.key,
         });
       }
@@ -360,7 +412,7 @@ module.exports = {
 
       if (!cleaned.length) {
         return sock.sendMessage(from, {
-          text: '❌😥 Results හමු නොවීය.',
+          text: '❌😥 *𝐍𝐨 𝐫𝐞𝐬𝐮𝐥𝐭𝐬*' + foot(),
           edit: loading.key,
         });
       }
@@ -368,16 +420,18 @@ module.exports = {
       setPending(from, { type: 'search', results: cleaned });
 
       let list =
-        `╭───「 🎥🍿 *𝐷𝐼𝑁𝐸𝐾𝐴 𝑆𝐸𝐴𝑅𝐶𝐻* 」───╮\n│\n` +
+        `╭───「 🎥🍿 *𝐃𝐈𝐍𝐊𝐀 𝐒𝐄𝐀𝐑𝐂𝐇* 」───╮\n│\n` +
         `│  🔎 *${query.slice(0, 40)}*\n` +
-        `│  📦 ${cleaned.length} results\n│\n`;
+        `│  📦 ${cleaned.length} 𝐫𝐞𝐬𝐮𝐥𝐭𝐬\n│\n`;
 
       cleaned.forEach((item) => {
         list += `│  *${item.index}.* ${String(item.title).slice(0, 45)}\n`;
         list += `│      📅 ${item.year}\n`;
       });
 
-      list += `\n│  👇 *${prefix}dinka <number>*\n│  ⏳ 3 min\n╰──────────────────────╯`;
+      list +=
+        `\n│  👇 *${prefix}dinka <number>*\n│  ⏳ 3 𝐦𝐢𝐧\n╰──────────────────────╯` +
+        foot();
 
       await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
@@ -396,7 +450,7 @@ module.exports = {
       console.error('Dinka search:', err.message);
       await sock
         .sendMessage(from, {
-          text: `❌💥 \`${err.message}\``,
+          text: `❌💥 \`${err.message}\`` + foot(),
           edit: loading.key,
         })
         .catch(() => {});
