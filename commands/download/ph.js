@@ -6,8 +6,6 @@ const SEARCH_API = 'https://api.chamindu.site/api/adult/pornhub/search';
 const DL_API = 'https://api.chamindu.site/api/adult/pornhub/dl';
 const STREAM_BASE = 'https://api.chamindu.site';
 const PENDING_TTL_MS = 2 * 60 * 1000;
-const MAX_WA_BYTES = 95 * 1024 * 1024;
-const MAX_SEGMENTS = 350;
 
 const pending = new Map();
 
@@ -21,124 +19,28 @@ function extractPhUrl(text) {
   return m ? m[0].replace(/[)\]>,.]+$/, '') : null;
 }
 
-function resolveUrl(base, relative) {
-  try {
-    return new URL(relative, base).href;
-  } catch (_) {
-    return relative;
-  }
-}
-
-async function fetchText(url) {
-  const res = await axios.get(url, {
-    timeout: 45000,
-    responseType: 'text',
-    headers: {
-      'User-Agent': UA,
-      Referer: 'https://www.pornhub.com/',
-      Accept: '*/*',
-    },
-  });
-  return { url, body: String(res.data || '') };
-}
-
-function parseM3u8(body, baseUrl) {
-  const lines = String(body || '').split(/\r?\n/).map((l) => l.trim());
-  const isMaster = body.includes('#EXT-X-STREAM-INF');
-  const segments = [];
-  let nested = null;
-  for (const line of lines) {
-    if (!line || line.startsWith('#')) continue;
-    const abs = resolveUrl(baseUrl, line);
-    if (isMaster && !nested) nested = abs;
-    else if (!isMaster) segments.push(abs);
-  }
-  return { isMaster, nested, segments };
-}
-
-/** Pure Node HLS → buffer (no ffmpeg) */
-async function downloadHlsBuffer(masterUrl, onProgress) {
-  let { url: curUrl, body } = await fetchText(masterUrl);
-  let parsed = parseM3u8(body, curUrl);
-
-  if (parsed.isMaster && parsed.nested) {
-    const idx = await fetchText(parsed.nested);
-    curUrl = idx.url;
-    body = idx.body;
-    parsed = parseM3u8(body, curUrl);
-  }
-
-  const segs = parsed.segments.slice(0, MAX_SEGMENTS);
-  if (!segs.length) throw new Error('HLS segments හොයාගන්න බැරි වුණා');
-
-  const chunks = [];
-  let total = 0;
-  const CONCURRENCY = 4;
-
-  for (let i = 0; i < segs.length; i += CONCURRENCY) {
-    const batch = segs.slice(i, i + CONCURRENCY);
-    const parts = await Promise.all(
-      batch.map(async (segUrl) => {
-        const res = await axios.get(segUrl, {
-          responseType: 'arraybuffer',
-          timeout: 60000,
-          maxContentLength: 25 * 1024 * 1024,
-          headers: {
-            'User-Agent': UA,
-            Referer: 'https://www.pornhub.com/',
-            Accept: '*/*',
-          },
-        });
-        return Buffer.from(res.data || []);
-      })
-    );
-    for (const p of parts) {
-      chunks.push(p);
-      total += p.length;
-      if (total > MAX_WA_BYTES + 5 * 1024 * 1024) {
-        throw new Error(`File too large (${(total / 1024 / 1024).toFixed(1)} MB)`);
-      }
-    }
-    if (onProgress) {
-      try {
-        await onProgress(Math.min(i + CONCURRENCY, segs.length), segs.length, total);
-      } catch (_) {}
-    }
-  }
-  return Buffer.concat(chunks);
-}
-
-function pickMediaUrl(data) {
+/** Pick best direct URL for Baileys document:{url} (zero RAM) */
+function pickDirectUrl(data) {
   if (!data || typeof data !== 'object') return null;
-  const candidates = [
-    data.direct_link,
-    data.download_url,
-    data.raw_link,
-    data.url,
-    data.link,
-  ].filter(Boolean);
 
-  // Prefer non-m3u8 if any
-  const mp4 = candidates.find((u) => typeof u === 'string' && !u.includes('.m3u8'));
-  if (mp4) return { url: mp4, kind: 'mp4' };
-
+  // Prefer stream_proxy (API CDN / proxy — better for WA upload from server)
   if (data.stream_proxy) {
-    const proxy = String(data.stream_proxy).startsWith('http')
-      ? data.stream_proxy
-      : STREAM_BASE + data.stream_proxy;
-    return { url: proxy, kind: 'hls' };
+    const p = String(data.stream_proxy);
+    return p.startsWith('http') ? p : STREAM_BASE + p;
   }
 
-  const hls = candidates.find((u) => typeof u === 'string' && u.includes('.m3u8'));
-  if (hls) return { url: hls, kind: 'hls' };
-
-  return candidates[0] ? { url: candidates[0], kind: 'unknown' } : null;
+  const keys = ['download_url', 'direct_link', 'raw_link', 'url', 'link'];
+  for (const k of keys) {
+    const v = data[k];
+    if (typeof v === 'string' && /^https?:\/\//i.test(v)) return v;
+  }
+  return null;
 }
 
 async function downloadAndSend({ sock, msg, from, item }) {
   const loading = await sock.sendMessage(
     from,
-    { text: '📥 *PH download...*' },
+    { text: '📥 *PH process...*' },
     { quoted: msg }
   );
 
@@ -159,121 +61,58 @@ async function downloadAndSend({ sock, msg, from, item }) {
     }
 
     const title = item.title || apiRes.data.title || 'PH Video';
-    const media = pickMediaUrl(apiRes.data);
-    if (!media) throw new Error('Download link හොයාගන්න බැරි වුණා');
+    const mediaUrl = pickDirectUrl(apiRes.data);
+    if (!mediaUrl) {
+      throw new Error('Direct download link හොයාගන්න බැරි වුණා');
+    }
 
     const thumb = item.thumbnail || null;
     const duration = item.duration || 'N/A';
+    const fileName =
+      (String(title).replace(/[\/\\:*?"<>|]/g, '').slice(0, 40).trim() || 'ph-video') +
+      '.mp4';
 
     const caption = `
 ╭───「 🔥 *PORNHUB* 」───╮
 │
 │  📌 *Title*    ›  ${String(title).slice(0, 60)}
 │  ⏱ *Duration* ›  ${duration}
-│  🎬 *Type*     ›  ${media.kind.toUpperCase()}
+│  📁 *Type*     ›  Document
 │
 ╰──────────────────────╯`.trim();
 
-    // Progressive MP4 → zero-RAM document URL stream
-    if (media.kind === 'mp4') {
-      await sock
-        .sendMessage(from, {
-          text: '⬆️ *Document upload (direct MP4)...*',
-          edit: loading.key,
-        })
-        .catch(() => {});
-
-      await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
-
-      if (thumb && /^https?:\/\//i.test(thumb)) {
-        await sock
-          .sendMessage(from, { image: { url: thumb }, caption }, { quoted: msg })
-          .catch(() =>
-            sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {})
-          );
-      } else {
-        await sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {});
-      }
-
-      const fileName =
-        (String(title).replace(/[\/\\:*?"<>|]/g, '').slice(0, 40) || 'ph') + '.mp4';
-
-      await sock.sendMessage(
-        from,
-        {
-          document: { url: media.url },
-          mimetype: 'video/mp4',
-          fileName,
-          caption: '📁 PH Video',
-        },
-        { quoted: msg }
-      );
-      return;
-    }
-
-    // HLS → segment buffer → document
     await sock
       .sendMessage(from, {
-        text: '⬇️ *HLS segments buffer...*\n⏳ ටිකක් ඉන්න',
+        text: '⬆️ *Document stream (zero RAM)...*\n📡 Baileys URL upload',
         edit: loading.key,
       })
       .catch(() => {});
 
-    let lastPct = -1;
-    const buffer = await downloadHlsBuffer(media.url, async (done, total, bytes) => {
-      const pct = Math.floor((done / total) * 100);
-      if (pct >= lastPct + 25 || done === total) {
-        lastPct = pct;
-        await sock
-          .sendMessage(from, {
-            text: `⬇️ *Downloading...*\n📦 ${done}/${total} · ${(bytes / 1024 / 1024).toFixed(1)} MB`,
-            edit: loading.key,
-          })
-          .catch(() => {});
-      }
-    });
-
-    if (!buffer || buffer.length < 20000) {
-      throw new Error('Buffer empty / invalid');
-    }
-
-    const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
-    if (buffer.length > MAX_WA_BYTES) {
-      return sock.sendMessage(from, {
-        text: `❌ File ලොකුයි (*${sizeMB} MB*).`,
-        edit: loading.key,
-      });
-    }
-
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
+    // Thumbnail + info
     if (thumb && /^https?:\/\//i.test(thumb)) {
-      await sock
-        .sendMessage(
+      try {
+        await sock.sendMessage(
           from,
-          {
-            image: { url: thumb },
-            caption: caption + `\n│  📦 *Size* ›  ${sizeMB} MB`,
-          },
+          { image: { url: thumb }, caption },
           { quoted: msg }
-        )
-        .catch(() =>
-          sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {})
         );
+      } catch (_) {
+        await sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {});
+      }
     } else {
       await sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {});
     }
 
-    const fileName =
-      (String(title).replace(/[\/\\:*?"<>|]/g, '').slice(0, 40) || 'ph') + '.mp4';
-
+    // Cinesubz style: Baileys fetches URL — no local buffer / zero RAM on our side
     await sock.sendMessage(
       from,
       {
-        document: buffer,
+        document: { url: mediaUrl },
         mimetype: 'video/mp4',
         fileName,
-        caption: '📁 *Document*',
+        caption: '📁 *PH Document*',
       },
       { quoted: msg }
     );
@@ -297,7 +136,6 @@ module.exports = {
   async execute({ sock, msg, from, args }) {
     const prefix = config.prefix || '.';
 
-    // .ph 1
     if (args.length === 1 && /^\d+$/.test(args[0])) {
       const idx = parseInt(args[0], 10) - 1;
       const p = pending.get(from);
@@ -347,12 +185,7 @@ module.exports = {
         sock,
         msg,
         from,
-        item: {
-          title: 'PH Video',
-          url: direct,
-          duration: 'N/A',
-          thumbnail: null,
-        },
+        item: { title: 'PH Video', url: direct, duration: 'N/A', thumbnail: null },
       });
     }
 
@@ -413,7 +246,6 @@ module.exports = {
 
       await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
-      // Image + list (xnxx style)
       if (cleaned[0].thumbnail && /^https?:\/\//i.test(cleaned[0].thumbnail)) {
         try {
           await sock.sendMessage(
