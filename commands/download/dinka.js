@@ -138,7 +138,7 @@ async function showQualities({ sock, msg, from, item }) {
     });
 
     list += `\n│  👇 *${config.prefix || '.'}dinka <number>*\n`;
-    list += `│  ⏳ 3 min · 📡 zero-RAM stream\n`;
+    list += `│  ⏳ 3 min · 📡 DARK QUEEN OFC\n`;
     list += `╰──────────────────────╯`;
 
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
@@ -185,7 +185,7 @@ async function sendDocument({ sock, msg, from, quality, title, poster }) {
 │  📁 *Type*    ›  Document
 │
 ╰──────────────────────╯
-📡 *Zero-RAM · Baileys URL stream*`.trim();
+📡 *𝐷𝐴𝑅𝐾 𝑄𝑈𝐸𝐸𝑁 · 𝑂𝐹𝐶*`.trim();
 
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
@@ -368,7 +368,7 @@ module.exports = {
       setPending(from, { type: 'search', results: cleaned });
 
       let list =
-        `╭───「 🎥🍿 *DINKA SEARCH* 」───╮\n│\n` +
+        `╭───「 🎥🍿 *𝐷𝐼𝑁𝐸𝐾𝐴 𝑆𝐸𝐴𝑅𝐶𝐻* 」───╮\n│\n` +
         `│  🔎 *${query.slice(0, 40)}*\n` +
         `│  📦 ${cleaned.length} results\n│\n`;
 
