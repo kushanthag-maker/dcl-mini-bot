@@ -71,7 +71,7 @@ module.exports = {
         `│  🆔 *Post*    ›  ${serverMsgId}\n` +
         `│  😀 *Emoji*   ›  ${emojis.join(' ')}\n` +
         `│  🤖 *Bots*    ›  ${result.bots}\n` +
-        `│  💥 *Reacts*  ›  ${result.done}/${result.requested}\n│\n` +
+        `│  💥 *Reacts*  ›  ${result.done}/${result.requested}\n│  💡 1 bot = 1 react\n│\n` +
         (result.errors?.length
           ? `│  ⚠️ ${result.errors[0].slice(0, 40)}\n│\n`
           : '') +
