@@ -16,7 +16,7 @@ const UA =
 
 function foot() {
   return (
-    `\n🌸💕 *Pair bot:* ${SITE}\n` +
+    `\n🌸✨ *Pair your queen:* ${SITE}\n` +
     `> ✦ ${FOOTER} ✦\n_*✰┈ ${BOT_FANCY} ┈✰*_`
   );
 }
@@ -28,66 +28,6 @@ function extractWatchUrl(text) {
   return m ? m[0].replace(/[)\]>,.]+$/, '') : null;
 }
 
-/** Prefer direct file hosts for Baileys document:{url} */
-function isDirectable(url) {
-  if (!url || !/^https?:\/\//i.test(url)) return false;
-  const u = url.toLowerCase();
-  if (u.includes('.m3u8') || u.includes('type=hls')) return false;
-  if (u.includes('multiup.io') || u.includes('1fichier') || u.includes('vikingfile'))
-    return false;
-  if (u.includes('dramavideo.se/watch')) return false;
-  // gofile direct, stream proxy with dl, cdn mp4
-  return true;
-}
-
-function pickDownloadUrl(d) {
-  const candidates = [
-    d.direct_link,
-    d.url,
-    d.link,
-    d.download,
-    d.raw_url,
-  ].filter(Boolean);
-  for (const c of candidates) {
-    if (isDirectable(c) && !String(c).includes('multiup') && !String(c).includes('1fichier')) {
-      // Prefer gofile / actual mp4
-      if (
-        /gofile\.io|file-.*\.gofile|cdn|mp4|\.mkv/i.test(c) ||
-        (c.includes('api.chamindu.site') && c.includes('dl=true'))
-      ) {
-        return c;
-      }
-    }
-  }
-  for (const c of candidates) {
-    if (isDirectable(c)) return c;
-  }
-  return null;
-}
-
-function normalizeDownloads(list) {
-  if (!Array.isArray(list)) return [];
-  const out = [];
-  for (const d of list) {
-    const url = pickDownloadUrl(d);
-    if (!url) continue;
-    out.push({
-      label: d.label || d.name || 'Download',
-      quality: d.quality || 'HD',
-      hoster: d.hoster || d.type || 'File',
-      name: d.name || '',
-      url,
-    });
-  }
-  // unique by url
-  const seen = new Set();
-  return out.filter((x) => {
-    if (seen.has(x.url)) return false;
-    seen.add(x.url);
-    return true;
-  });
-}
-
 function setPending(from, state) {
   const old = pending.get(from);
   if (old?.timeout) clearTimeout(old.timeout);
@@ -97,7 +37,6 @@ function setPending(from, state) {
 
 function formatShowInfo(info) {
   if (!info || typeof info !== 'object') return '';
-  const lines = [];
   const map = {
     Event: '🎪',
     Date: '📅',
@@ -107,22 +46,59 @@ function formatShowInfo(info) {
     'Broadcast On': '📺',
     'Available In': '✨',
   };
+  const lines = [];
   for (const [k, v] of Object.entries(info)) {
     if (v == null || v === '') continue;
-    const em = map[k] || '💗';
-    lines.push(`│  ${em} *${k}* › ${String(v).slice(0, 55)}`);
+    lines.push(`│  ${map[k] || '💗'} *${k}* › ${String(v).slice(0, 55)}`);
   }
-  return lines.join('\n');
+  return lines.length ? lines.join('\n') + '\n' : '';
 }
 
 function formatMatches(matches, limit = 5) {
   if (!Array.isArray(matches) || !matches.length) return '';
-  let s = `│\n│  🥊 *Match Card:*\n`;
+  let s = `│\n│  🥊💕 *Match highlights:*\n`;
   matches.slice(0, limit).forEach((m, i) => {
-    s += `│  ${i + 1}. ${String(m).slice(0, 70)}\n`;
+    s += `│  ${['🌸', '💗', '💖', '✨', '🎀'][i % 5]} ${String(m).slice(0, 68)}\n`;
   });
   if (matches.length > limit) s += `│  … +${matches.length - limit} more\n`;
   return s;
+}
+
+/** Build download options — keep page + direct for user */
+function normalizeDownloads(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const d of list) {
+    const page =
+      d.page_url ||
+      (d.hoster && String(d.hoster).toLowerCase() === 'gofile' && d.url && d.url.includes('gofile.io/d/')
+        ? d.url
+        : null);
+    const direct = d.direct_link || d.url || d.link || null;
+    // skip pure m3u8-only as "file" option if no page
+    const isM3u8 =
+      (d.type && String(d.type).toLowerCase().includes('m3u8')) ||
+      (direct && String(direct).includes('.m3u8'));
+
+    if (!direct && !page) continue;
+    if (isM3u8 && !page) continue;
+
+    out.push({
+      label: d.label || d.name || 'Download',
+      quality: d.quality || 'HD',
+      hoster: d.hoster || d.type || 'Link',
+      name: d.name || '',
+      url: direct,
+      page: page || (direct && /gofile\.io\/d\//i.test(direct) ? direct : null),
+    });
+  }
+  const seen = new Set();
+  return out.filter((x) => {
+    const key = (x.page || '') + '|' + (x.url || '');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function fetchInfo(pageUrl) {
@@ -139,10 +115,51 @@ async function fetchInfo(pageUrl) {
   return res.data.data || res.data.result || res.data;
 }
 
+/**
+ * Check if URL is real media (not HTML login page)
+ * Gofile direct links often return HTML ~3KB → WhatsApp shows "KB"
+ */
+async function probeMedia(url) {
+  try {
+    const res = await axios.get(url, {
+      timeout: 25000,
+      maxRedirects: 5,
+      responseType: 'arraybuffer',
+      maxContentLength: 64 * 1024,
+      headers: {
+        'User-Agent': UA,
+        Accept: '*/*',
+        Range: 'bytes=0-2048',
+        Referer: 'https://gofile.io/',
+      },
+      validateStatus: () => true,
+    });
+    const buf = Buffer.from(res.data || []);
+    const ct = String(res.headers['content-type'] || '').toLowerCase();
+    const cl = parseInt(res.headers['content-length'] || '0', 10);
+
+    if (ct.includes('text/html') || ct.includes('text/plain')) {
+      return { ok: false, reason: 'html', ct, cl };
+    }
+    // mp4/webm magic
+    const isMp4 =
+      (buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70) ||
+      ct.includes('video') ||
+      ct.includes('octet-stream') ||
+      ct.includes('mp4');
+    if (!isMp4 && cl > 0 && cl < 50000) {
+      return { ok: false, reason: 'too_small', ct, cl };
+    }
+    return { ok: true, ct, cl };
+  } catch (e) {
+    return { ok: false, reason: e.message };
+  }
+}
+
 async function showDetails({ sock, msg, from, item }) {
   const loading = await sock.sendMessage(
     from,
-    { text: '🌸✨ *𝐋𝐨𝐚𝐝𝐢𝐧𝐠 𝐬𝐡𝐨𝐰 𝐢𝐧𝐟𝐨...*' },
+    { text: '🌸✨ *හුරතල් queen info ගන්නවා...*' },
     { quoted: msg }
   );
 
@@ -153,26 +170,16 @@ async function showDetails({ sock, msg, from, item }) {
     const date = info.date || item.date || 'N/A';
     const showInfo = info.show_info || {};
     const matches = info.match_card || info.matches || [];
-    const story = String(info.story || info.description || '').slice(0, 280);
+    const story = String(info.story || info.description || '').slice(0, 260);
     const downloads = normalizeDownloads(info.downloads || []);
 
     if (!downloads.length) {
-      // still show info + stream links as text
-      const streams = Array.isArray(info.streams) ? info.streams : [];
-      let streamTxt = streams
-        .slice(0, 5)
-        .map((s, i) => `│  ${i + 1}. ${s.quality || s.label} — ${(s.url || s.link || '').slice(0, 40)}…`)
-        .join('\n');
-
       return sock.sendMessage(from, {
         text:
           `╭───「 💖 *𝐖𝐖𝐄* 」───╮\n│\n` +
-          `│  👑 *${String(title).slice(0, 50)}*\n` +
-          `│  📅 ${date}\n` +
-          (story ? `│\n│  📝 ${story}\n` : '') +
-          formatMatches(matches) +
-          (streamTxt ? `│\n│  📺 *Streams:*\n${streamTxt}\n` : '') +
-          `│\n│  ❌ Direct document links හමු නොවීය\n` +
+          `│  👑 *${String(title).slice(0, 48)}*\n` +
+          `│  📅 ${date}\n│\n` +
+          `│  🥺 Download links හමු නොවීය\n` +
           `╰──────────────────────╯` +
           foot(),
         edit: loading.key,
@@ -185,8 +192,6 @@ async function showDetails({ sock, msg, from, item }) {
       image,
       date,
       downloads,
-      showInfo,
-      matches,
       pageUrl: item.url,
     });
 
@@ -195,23 +200,22 @@ async function showDetails({ sock, msg, from, item }) {
       `│  👑 *Title* › ${String(title).slice(0, 48)}\n` +
       `│  📅 *Date*  › ${date}\n`;
 
-    const si = formatShowInfo(showInfo);
-    if (si) list += `│\n${si}\n`;
+    list += formatShowInfo(showInfo);
     list += formatMatches(matches, 4);
 
     if (story) {
-      list += `│\n│  📝 *Story:*\n│  ${story.slice(0, 160)}${story.length > 160 ? '…' : ''}\n`;
+      list += `│\n│  📝 *Story*\n│  ${story.slice(0, 150)}${story.length > 150 ? '…' : ''}\n`;
     }
 
-    list += `│\n│  📥 *Download (document):*\n│\n`;
+    list += `│\n│  📥💕 *Quality තෝරන්න:*\n│\n`;
     downloads.forEach((d, i) => {
       list += `│  *${i + 1}.* ${d.quality} · ${d.hoster}\n`;
-      list += `│      💗 ${String(d.label).slice(0, 40)}\n`;
+      list += `│      💗 ${String(d.label).slice(0, 42)}\n`;
     });
 
     list +=
       `\n│  👇 *${config.prefix || '.'}wwe <number>*\n` +
-      `│  ⏳ 3 min · 📡 QUEEN THMA PATIYO\n` +
+      `│  ⏳ 3 minutes sweetheart\n` +
       `╰──────────────────────╯` +
       foot();
 
@@ -239,56 +243,84 @@ async function showDetails({ sock, msg, from, item }) {
   }
 }
 
-async function sendDoc({ sock, msg, from, quality, title, image }) {
+async function sendDownload({ sock, msg, from, quality, title, image }) {
   const loading = await sock.sendMessage(
     from,
-    {
-      text: `⬆️🌸 *𝐃𝐨𝐜𝐮𝐦𝐞𝐧𝐭 𝐬𝐭𝐫𝐞𝐚𝐦...*\n💗 ${quality.quality}\n✨ ${quality.hoster}`,
-    },
+    { text: `🌸💗 *${quality.quality}* හොයලා බලනවා...` },
     { quoted: msg }
   );
 
   try {
-    const caption =
-      `╭───「 💖 *𝐖𝐖𝐄 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃* 」───╮\n│\n` +
+    const pretty =
+      `╭───「 💖 *𝐖𝐖𝐄 𝐅𝐎𝐑 𝐘𝐎𝐔* 」───╮\n│\n` +
       `│  👑 *Title*   › ${String(title).slice(0, 48)}\n` +
       `│  🎥 *Quality* › ${quality.quality}\n` +
-      `│  🏷️ *Host*    › ${quality.hoster}\n` +
-      `│  📁 *Type*    › Document\n│\n` +
-      `╰──────────────────────╯` +
-      foot();
+      `│  🏷️ *Host*    › ${quality.hoster}\n│\n` +
+      `╰──────────────────────╯`;
+
+    // Probe direct URL — avoid sending 3KB HTML as "video"
+    let canDoc = false;
+    if (quality.url && /^https?:\/\//i.test(quality.url)) {
+      const probe = await probeMedia(quality.url);
+      console.log('[WWE] probe', probe);
+      canDoc = !!probe.ok;
+    }
 
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
     if (image && /^https?:\/\//i.test(image)) {
       await sock
-        .sendMessage(from, { image: { url: image }, caption }, { quoted: msg })
+        .sendMessage(from, { image: { url: image }, caption: pretty + foot() }, { quoted: msg })
         .catch(() =>
-          sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {})
+          sock.sendMessage(from, { text: pretty + foot() }, { quoted: msg }).catch(() => {})
         );
     } else {
-      await sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {});
+      await sock.sendMessage(from, { text: pretty + foot() }, { quoted: msg }).catch(() => {});
     }
 
-    const fileName =
-      (String(title).replace(/[\/\\:*?"<>|]/g, '').slice(0, 40).trim() || 'wwe') +
-      '.mp4';
+    if (canDoc) {
+      const fileName =
+        (String(title).replace(/[\/\\:*?"<>|]/g, '').slice(0, 40).trim() || 'wwe') +
+        '.mp4';
+      await sock.sendMessage(
+        from,
+        {
+          document: { url: quality.url },
+          mimetype: 'video/mp4',
+          fileName,
+          caption: `📁💖 *${quality.quality}* · ${quality.hoster}\n> ✦ ${FOOTER} ✦`,
+        },
+        { quoted: msg }
+      );
+      return;
+    }
 
-    await sock.sendMessage(
-      from,
-      {
-        document: { url: quality.url },
-        mimetype: 'video/mp4',
-        fileName,
-        caption: `📁💖 *${quality.quality}*\n> ✦ ${FOOTER} ✦`,
-      },
-      { quoted: msg }
-    );
+    // Gofile / hosts block hotlink → send openable links (real forward to user)
+    let links = `╭───「 💗 *𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃 𝐋𝐈𝐍𝐊𝐒* 」───╮\n│\n`;
+    links += `│  👑 ${String(title).slice(0, 42)}\n`;
+    links += `│  ✨ ${quality.quality} · ${quality.hoster}\n│\n`;
+
+    if (quality.page) {
+      links += `│  🌸 *Open page:*\n│  ${quality.page}\n│\n`;
+    }
+    if (quality.url && quality.url !== quality.page) {
+      links += `│  💖 *Direct / mirror:*\n│  ${quality.url}\n│\n`;
+    }
+
+    links +=
+      `│  💡 Link එක touch කරලා browser එකෙන්\n` +
+      `│     download කරන්න (queen tip 💕)\n` +
+      `│\n│  ⚠️ Hosts hotlink block කරන නිසා\n` +
+      `│     WhatsApp document auto-send බැරි වුණා\n` +
+      `╰──────────────────────╯` +
+      foot();
+
+    await sock.sendMessage(from, { text: links }, { quoted: msg });
   } catch (err) {
     console.error('WWE send:', err.message);
     await sock
       .sendMessage(from, {
-        text: `❌💔 Upload fail\n\`${err.message}\`` + foot(),
+        text: `❌💔 \`${err.message}\`` + foot(),
         edit: loading.key,
       })
       .catch(() => {});
@@ -312,14 +344,14 @@ module.exports = {
         if (idx < 0 || idx >= state.downloads.length) {
           return sock.sendMessage(
             from,
-            { text: `❌ *1*–*${state.downloads.length}* select 💕` + foot() },
+            { text: `❌ *1*–*${state.downloads.length}* තෝරන්න 💕` + foot() },
             { quoted: msg }
           );
         }
         const q = state.downloads[idx];
         if (state.timeout) clearTimeout(state.timeout);
         pending.delete(from);
-        return sendDoc({
+        return sendDownload({
           sock,
           msg,
           from,
@@ -333,7 +365,7 @@ module.exports = {
         if (idx < 0 || idx >= state.results.length) {
           return sock.sendMessage(
             from,
-            { text: `❌ *1*–*${state.results.length}* select 💕` + foot() },
+            { text: `❌ *1*–*${state.results.length}* තෝරන්න 💕` + foot() },
             { quoted: msg }
           );
         }
@@ -342,9 +374,7 @@ module.exports = {
 
       return sock.sendMessage(
         from,
-        {
-          text: `❌ Active search නැහැ 🥺\n💡 \`${prefix}wwe Raw\`` + foot(),
-        },
+        { text: `❌ Search එකක් නැහැ 🥺\n💡 \`${prefix}wwe Raw\`` + foot() },
         { quoted: msg }
       );
     }
@@ -354,15 +384,14 @@ module.exports = {
         from,
         {
           text:
-            `╭───「 💖🥊 *𝐖𝐖𝐄 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃* 」───╮\n│\n` +
-            `│  ${prefix}wwe <query>\n` +
-            `│  ${prefix}wwe <number>\n` +
-            `│  ${prefix}wwe <watchwrestling url>\n│\n` +
+            `╭───「 💖🥊 *𝐖𝐖𝐄* 」───╮\n│\n` +
+            `│  🌸 ${prefix}wwe <show name>\n` +
+            `│  💗 ${prefix}wwe <number>\n` +
+            `│  ✨ ${prefix}wwe <url>\n│\n` +
             `│  📌 Example:\n` +
             `│  ${prefix}wwe Raw\n` +
-            `│  ${prefix}wwe SmackDown\n` +
-            `│  ${prefix}wwe 1\n│\n` +
-            `│  🌸 Queen style · I LOVE YOU\n` +
+            `│  ${prefix}wwe SmackDown\n│\n` +
+            `│  👑 Made with love for you\n` +
             `╰──────────────────────╯` +
             foot(),
         },
@@ -383,7 +412,7 @@ module.exports = {
 
     const loading = await sock.sendMessage(
       from,
-      { text: '🔍💗 *𝐖𝐖𝐄 𝐬𝐞𝐚𝐫𝐜𝐡...*' },
+      { text: '🔍💕 *Queen search පටන් ගත්තා...*' },
       { quoted: msg }
     );
 
