@@ -7,15 +7,15 @@ const INFO_API = 'https://api.chamindu.site/api/v1/movies/baiscope/infodl';
 const SITE = 'https://dark-queen.vercel.app';
 const FOOTER = 'DARK QUEEN OFC';
 const BOT_FANCY = '𝕯𝕬𝕽𝕶 𝕼𝖀𝕰𝕰𝕹 𝕸𝕴𝕹𝕴';
-const PENDING_TTL_MS = 3 * 60 * 1000;
+const PENDING_TTL_MS = 4 * 60 * 1000;
 
 const pending = new Map();
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-function foot() {
-  return `🌸 Pair me: ${SITE}\n> ✦ ${FOOTER} ✦\n_*✰┈ ${BOT_FANCY} ┈✰*_`;
+function footLine() {
+  return `🌸 Pair: ${SITE} · ${FOOTER}`;
 }
 
 function setPending(from, state) {
@@ -25,15 +25,31 @@ function setPending(from, state) {
   pending.set(from, state);
 }
 
-function getButtonId(msg) {
+/** Parse button / list / native-flow reply id */
+function getInteractiveId(msg) {
   const m = msg.message || {};
-  return (
-    m.buttonsResponseMessage?.selectedButtonId ||
-    m.templateButtonReplyMessage?.selectedId ||
-    m.listResponseMessage?.singleSelectReply?.selectedRowId ||
-    m.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
-    null
-  );
+
+  if (m.buttonsResponseMessage?.selectedButtonId) {
+    return m.buttonsResponseMessage.selectedButtonId;
+  }
+  if (m.templateButtonReplyMessage?.selectedId) {
+    return m.templateButtonReplyMessage.selectedId;
+  }
+  if (m.listResponseMessage?.singleSelectReply?.selectedRowId) {
+    return m.listResponseMessage.singleSelectReply.selectedRowId;
+  }
+
+  // Modern native flow
+  const nf = m.interactiveResponseMessage?.nativeFlowResponseMessage;
+  if (nf?.paramsJson) {
+    try {
+      const p = JSON.parse(nf.paramsJson);
+      return p.id || p.selectedRowId || p.button_id || p.rowId || null;
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
 }
 
 async function searchApi(query) {
@@ -44,7 +60,9 @@ async function searchApi(query) {
     headers: { 'User-Agent': UA },
   });
   if (res.status !== 200 || !res.data) throw new Error(`Search HTTP ${res.status}`);
-  if (res.data.status === false) throw new Error(res.data.error || res.data.message || 'Search failed');
+  if (res.data.status === false) {
+    throw new Error(res.data.error || res.data.message || 'Search failed');
+  }
   const data = Array.isArray(res.data.data) ? res.data.data : [];
   return data
     .filter((r) => r && (r.link || r.url))
@@ -68,99 +86,140 @@ async function infoApi(pageUrl) {
     headers: { 'User-Agent': UA },
   });
   if (res.status !== 200 || !res.data) throw new Error(`Info HTTP ${res.status}`);
-  if (res.data.status === false) throw new Error(res.data.error || res.data.message || 'Info failed');
+  if (res.data.status === false) {
+    throw new Error(res.data.error || res.data.message || 'Info failed');
+  }
   return res.data.data || res.data.result || res.data;
 }
 
-/** Send search results with LIST (button menu) — no number reply */
-async function sendSearchList({ sock, msg, from, query, results }) {
-  setPending(from, { type: 'search', results });
+/**
+ * Modern buttons that work on current WA (interactiveButtons / native flow)
+ * Old { buttons: [{buttonId, buttonText}] } often shows "Tap to open" with no buttons.
+ */
+async function sendInteractiveSelect({ sock, from, msg, text, title, rows, image }) {
+  const interactiveButtons = [
+    {
+      name: 'single_select',
+      buttonParamsJson: JSON.stringify({
+        title: title || 'Select',
+        sections: [
+          {
+            title: '💗 Options',
+            rows: rows.map((r) => ({
+              header: r.header || '',
+              title: String(r.title).slice(0, 24),
+              description: String(r.description || '').slice(0, 72),
+              id: r.id,
+            })),
+          },
+        ],
+      }),
+    },
+  ];
 
-  const caption =
-    `╭───「 💖 *BAISCOPE* 」───╮\n│\n` +
-    `│  🔎 *Search:* ${String(query).slice(0, 40)}\n` +
-    `│  📦 *Found:* ${results.length} titles\n│\n` +
-    `│  🌸 Tap a button below, babe\n` +
-    `│  💗 Pick your favorite show\n│\n` +
-    `╰──────────────────────╯\n` +
-    foot();
+  // Try image + interactive
+  if (image) {
+    try {
+      await sock.sendMessage(
+        from,
+        {
+          image: { url: image },
+          caption: text,
+          footer: footLine(),
+          title: title || 'Baiscope',
+          interactiveButtons,
+        },
+        { quoted: msg }
+      );
+      return true;
+    } catch (e) {
+      console.error('[baiscope] image interactive fail:', e.message);
+    }
+  }
 
-  const rows = results.map((r, i) => ({
-    title: `${i + 1}. ${String(r.title).slice(0, 22)}`,
-    description: `✨ ${r.type} · ⭐ ${r.rating}`,
-    rowId: `baiscope_s_${i}`,
-  }));
-
-  // List message (selection UI)
   try {
     await sock.sendMessage(
       from,
       {
-        text: caption,
-        footer: FOOTER,
-        title: '💕 Baiscope Results',
-        buttonText: '🌸 Open list',
-        sections: [
-          {
-            title: '💗 Select a title',
-            rows,
-          },
-        ],
+        text,
+        footer: footLine(),
+        title: title || 'Baiscope',
+        subtitle: 'Dark Queen 💕',
+        interactiveButtons,
       },
       { quoted: msg }
     );
-    return;
-  } catch (e1) {
-    console.error('Baiscope list fail:', e1.message);
+    return true;
+  } catch (e) {
+    console.error('[baiscope] interactive fail:', e.message);
   }
 
-  // Fallback: up to 3 quick buttons + image
-  const buttons = results.slice(0, 3).map((r, i) => ({
-    buttonId: `baiscope_s_${i}`,
-    buttonText: { displayText: `💗 ${i + 1}. ${String(r.title).slice(0, 18)}` },
-    type: 1,
-  }));
-
+  // Fallback: quick_reply buttons (max 3)
   try {
-    if (results[0].image) {
-      await sock.sendMessage(
-        from,
-        {
-          image: { url: results[0].image },
-          caption,
-          footer: FOOTER,
-          buttons,
-          headerType: 4,
-        },
-        { quoted: msg }
-      );
-    } else {
-      await sock.sendMessage(
-        from,
-        {
-          text: caption,
-          footer: FOOTER,
-          buttons,
-          headerType: 1,
-        },
-        { quoted: msg }
-      );
-    }
+    const qbtns = rows.slice(0, 3).map((r) => ({
+      name: 'quick_reply',
+      buttonParamsJson: JSON.stringify({
+        display_text: String(r.title).slice(0, 20),
+        id: r.id,
+      }),
+    }));
+    await sock.sendMessage(
+      from,
+      {
+        text,
+        footer: footLine(),
+        interactiveButtons: qbtns,
+      },
+      { quoted: msg }
+    );
+    return true;
   } catch (e2) {
-    // Ultimate fallback text (still no numbers required if buttons worked elsewhere)
-    let text = caption + '\n';
-    results.forEach((r, i) => {
-      text += `\n*${i + 1}.* ${r.title}\n`;
-    });
-    text += `\n_Buttons unavailable — reply .baiscope s1 / s2_`;
-    await sock.sendMessage(from, { text }, { quoted: msg });
+    console.error('[baiscope] quick_reply fail:', e2.message);
   }
+
+  // Last fallback: plain text with id hints
+  let plain = text + '\n\n';
+  rows.forEach((r, i) => {
+    plain += `*${i + 1}.* ${r.title}\n`;
+  });
+  plain += `\n_Reply:_ \`.baiscope ${rows[0]?.id || 'baiscope_s_0'}\``;
+  await sock.sendMessage(from, { text: plain }, { quoted: msg });
+  return false;
 }
 
-async function sendInfoWithButtons({ sock, msg, from, item }) {
+async function sendSearchUI({ sock, msg, from, query, results }) {
+  setPending(from, { type: 'search', results });
+
+  const text =
+    `╭───「 💖 *BAISCOPE* 」───╮\n│\n` +
+    `│  🔎 *Search* › ${String(query).slice(0, 36)}\n` +
+    `│  📦 *Found*  › ${results.length} titles\n│\n` +
+    `│  🌸 Open the menu below, babe\n` +
+    `│  💗 Tap your movie / episode\n│\n` +
+    `╰──────────────────────╯\n` +
+    `_*✰┈ ${BOT_FANCY} ┈✰*_`;
+
+  const rows = results.map((r, i) => ({
+    title: `${i + 1}. ${String(r.title).slice(0, 20)}`,
+    description: `✨ ${r.type} · ⭐ ${r.rating}`,
+    id: `baiscope_s_${i}`,
+  }));
+
+  await sendInteractiveSelect({
+    sock,
+    from,
+    msg,
+    text,
+    title: '💕 Pick a title',
+    rows,
+    image: results[0]?.image,
+  });
+}
+
+async function sendInfoUI({ sock, msg, from, item }) {
   const loading = await sock.sendMessage(
     from,
-    { text: '🌸✨ *Loading details for you...*' },
+    { text: '🌸✨ *Fetching details for you...*' },
     { quoted: msg }
   );
 
@@ -172,157 +231,214 @@ async function sendInfoWithButtons({ sock, msg, from, item }) {
     const director = info.director || 'N/A';
     const language = info.language || 'N/A';
     const genres = Array.isArray(info.genres) ? info.genres.join(', ') : info.genres || 'N/A';
-    const story = String(info.story || '').slice(0, 220);
+    const story = String(info.story || '').slice(0, 200);
     const downloads = Array.isArray(info.downloads)
-      ? info.downloads.filter((d) => d && (d.link || d.url)).slice(0, 10)
+      ? info.downloads.filter((d) => d && (d.link || d.url)).slice(0, 12)
       : [];
 
     setPending(from, {
       type: 'dl',
       title,
       image,
+      pageUrl: item.link,
       downloads: downloads.map((d, i) => ({
         index: i,
-        name: d.name || `Link ${i + 1}`,
+        name: d.name || `Download ${i + 1}`,
         link: d.link || d.url,
       })),
     });
 
-    const caption =
+    const text =
       `╭───「 💖 *BAISCOPE* 」───╮\n│\n` +
-      `│  👑 *Title* › ${String(title).slice(0, 48)}\n` +
+      `│  👑 *Title* › ${String(title).slice(0, 46)}\n` +
       `│  ⭐ *IMDb*  › ${imdb}\n` +
-      `│  🎬 *Director* › ${String(director).slice(0, 30)}\n` +
+      `│  🎬 *Director* › ${String(director).slice(0, 28)}\n` +
       `│  🗣️ *Language* › ${language}\n` +
-      `│  🎀 *Genres* › ${String(genres).slice(0, 40)}\n│\n` +
-      (story ? `│  📝 ${story}${story.length >= 220 ? '…' : ''}\n│\n` : '') +
-      `│  💗 *${downloads.length}* download link(s)\n` +
-      `│  🌸 Tap a button to get your link\n│\n` +
+      `│  🎀 *Genres* › ${String(genres).slice(0, 36)}\n│\n` +
+      (story ? `│  📝 ${story}${story.length >= 200 ? '…' : ''}\n│\n` : '') +
+      `│  📥 *${downloads.length}* file link(s)\n` +
+      `│  💕 Open menu → get your link\n│\n` +
       `╰──────────────────────╯\n` +
-      foot();
+      `_*✰┈ ${BOT_FANCY} ┈✰*_`;
 
     await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
 
     if (!downloads.length) {
-      await sock.sendMessage(from, { text: caption + '\n🥺 No download links found' }, { quoted: msg });
+      if (image) {
+        await sock.sendMessage(
+          from,
+          { image: { url: image }, caption: text + '\n🥺 No download links' },
+          { quoted: msg }
+        );
+      } else {
+        await sock.sendMessage(from, { text: text + '\n🥺 No download links' }, { quoted: msg });
+      }
       return;
     }
 
-    const rows = downloads.map((d, i) => ({
-      title: `💕 Link ${i + 1}`,
-      description: String(d.name).replace(/🎥/g, '🎬').slice(0, 40),
-      rowId: `baiscope_d_${i}`,
+    // CTA URL buttons (open host page) + single_select for many
+    const ctaButtons = downloads.slice(0, 2).map((d, i) => ({
+      name: 'cta_url',
+      buttonParamsJson: JSON.stringify({
+        display_text: `💗 Open link ${i + 1}`,
+        url: d.link,
+        merchant_url: d.link,
+      }),
     }));
+
+    const selectBtn = {
+      name: 'single_select',
+      buttonParamsJson: JSON.stringify({
+        title: '📥 All downloads',
+        sections: [
+          {
+            title: '💕 Choose a file',
+            rows: downloads.map((d, i) => ({
+              header: '',
+              title: `Link ${i + 1}`,
+              description: String(d.name).replace(/🎥/g, '🎬').slice(0, 60),
+              id: `baiscope_d_${i}`,
+            })),
+          },
+        ],
+      }),
+    };
+
+    const payload = {
+      text,
+      footer: footLine(),
+      title: '💖 Baiscope',
+      subtitle: String(title).slice(0, 40),
+      interactiveButtons: [...ctaButtons, selectBtn],
+    };
 
     try {
       if (image) {
         await sock.sendMessage(
           from,
-          { image: { url: image }, caption },
-          { quoted: msg }
-        );
-      }
-      await sock.sendMessage(
-        from,
-        {
-          text: `🌸 *Pick a download, sweetheart*\n👑 ${String(title).slice(0, 40)}`,
-          footer: FOOTER,
-          title: '💗 Download links',
-          buttonText: '✨ Open',
-          sections: [{ title: '📥 Links', rows }],
-        },
-        { quoted: msg }
-      );
-    } catch (e) {
-      // 3 buttons fallback
-      const buttons = downloads.slice(0, 3).map((d, i) => ({
-        buttonId: `baiscope_d_${i}`,
-        buttonText: { displayText: `💖 Link ${i + 1}` },
-        type: 1,
-      }));
-      try {
-        await sock.sendMessage(
-          from,
           {
-            text: caption,
-            footer: FOOTER,
-            buttons,
-            headerType: 1,
+            image: { url: image },
+            caption: text,
+            footer: footLine(),
+            interactiveButtons: [...ctaButtons, selectBtn],
           },
           { quoted: msg }
         );
-      } catch (e2) {
-        let t = caption + '\n';
-        downloads.forEach((d, i) => {
-          t += `\n*${i + 1}.* ${d.name}\n${d.link}\n`;
-        });
-        await sock.sendMessage(from, { text: t }, { quoted: msg });
+      } else {
+        await sock.sendMessage(from, payload, { quoted: msg });
       }
+    } catch (e) {
+      console.error('[baiscope] info buttons fail:', e.message);
+      await sendInteractiveSelect({
+        sock,
+        from,
+        msg,
+        text,
+        title: '📥 Downloads',
+        rows: downloads.map((d, i) => ({
+          title: `Link ${i + 1}`,
+          description: String(d.name).slice(0, 40),
+          id: `baiscope_d_${i}`,
+        })),
+        image,
+      });
     }
   } catch (err) {
     console.error('Baiscope info:', err.message);
     await sock
       .sendMessage(from, {
-        text: `❌💔 \`${err.message}\`\n` + foot(),
+        text: `❌💔 \`${err.message}\``,
         edit: loading.key,
       })
       .catch(() => {});
   }
 }
 
-async function sendDlLink({ sock, msg, from, dl, title }) {
+async function sendDl({ sock, msg, from, dl, title }) {
+  // UsersDrive / file hosts = HTML pages, NOT direct mp4
+  // Cannot cinesubz-style document without real media URL
   const text =
-    `╭───「 💕 *YOUR LINK* 」───╮\n│\n` +
+    `╭───「 💕 *YOUR DOWNLOAD* 」───╮\n│\n` +
     `│  👑 *${String(title).slice(0, 42)}*\n` +
     `│  💗 ${String(dl.name).slice(0, 42)}\n│\n` +
     `│  🔗 ${dl.link}\n│\n` +
-    `│  🌸 Tap the link to open, babe\n` +
+    `│  🌸 Tap link → browser → download\n` +
+    `│  💡 Host blocks direct WhatsApp upload\n│\n` +
     `╰──────────────────────╯\n` +
-    foot();
+    `_*✰┈ ${BOT_FANCY} ┈✰*_`;
 
-  await sock.sendMessage(from, { text }, { quoted: msg });
+  // Try open-url button
+  try {
+    await sock.sendMessage(
+      from,
+      {
+        text,
+        footer: footLine(),
+        interactiveButtons: [
+          {
+            name: 'cta_url',
+            buttonParamsJson: JSON.stringify({
+              display_text: '💗 Open download page',
+              url: dl.link,
+              merchant_url: dl.link,
+            }),
+          },
+          {
+            name: 'cta_copy',
+            buttonParamsJson: JSON.stringify({
+              display_text: '✨ Copy link',
+              copy_code: dl.link,
+            }),
+          },
+        ],
+      },
+      { quoted: msg }
+    );
+  } catch (_) {
+    await sock.sendMessage(from, { text }, { quoted: msg });
+  }
 }
 
 module.exports = {
   name: 'baiscope',
   aliases: ['bais', 'baiscopedl', 'bscope'],
-  description: 'Search Baiscope movies (button UI)',
+  description: 'Search Baiscope movies with interactive buttons',
   category: 'download',
 
-  async execute({ sock, msg, from, args, body }) {
+  async execute({ sock, msg, from, args }) {
     const prefix = config.prefix || '.';
 
-    // ----- Button / list replies -----
-    const btnId = getButtonId(msg) || (args[0] && String(args[0])) || '';
-    const btnStr = typeof btnId === 'string' ? btnId : '';
+    // Interactive reply
+    const id =
+      getInteractiveId(msg) ||
+      (args[0] && /^baiscope_[sd]_\d+$/.test(args[0]) ? args[0] : null);
 
-    // fallback: .baiscope s0 / d0
-    let m = btnStr.match(/^baiscope_s_(\d+)$/) || (args[0] && String(args[0]).match(/^s(\d+)$/));
-    if (m) {
-      const idx = parseInt(m[1], 10);
+    if (id && /^baiscope_s_(\d+)$/.test(id)) {
+      const idx = parseInt(id.split('_').pop(), 10);
       const state = pending.get(from);
-      if (!state || state.type !== 'search' || !state.results?.[idx]) {
+      if (!state?.results?.[idx]) {
         return sock.sendMessage(
           from,
-          { text: `🥺 Session expired\n💡 Try \`${prefix}baiscope <name>\` again\n` + foot() },
+          {
+            text: `🥺 Session expired, babe\n💡 \`${prefix}baiscope <name>\``,
+          },
           { quoted: msg }
         );
       }
-      return sendInfoWithButtons({ sock, msg, from, item: state.results[idx] });
+      return sendInfoUI({ sock, msg, from, item: state.results[idx] });
     }
 
-    m = btnStr.match(/^baiscope_d_(\d+)$/) || (args[0] && String(args[0]).match(/^d(\d+)$/));
-    if (m) {
-      const idx = parseInt(m[1], 10);
+    if (id && /^baiscope_d_(\d+)$/.test(id)) {
+      const idx = parseInt(id.split('_').pop(), 10);
       const state = pending.get(from);
-      if (!state || state.type !== 'dl' || !state.downloads?.[idx]) {
+      if (!state?.downloads?.[idx]) {
         return sock.sendMessage(
           from,
-          { text: `🥺 Session expired\n💡 Search again, queen\n` + foot() },
+          { text: `🥺 Session expired\n💡 Search again 💕` },
           { quoted: msg }
         );
       }
-      return sendDlLink({
+      return sendDl({
         sock,
         msg,
         from,
@@ -337,14 +453,12 @@ module.exports = {
         {
           text:
             `╭───「 💖 *BAISCOPE* 」───╮\n│\n` +
-            `│  🌸 ${prefix}baiscope <movie / show>\n│\n` +
-            `│  📌 Example:\n` +
-            `│  ${prefix}baiscope Avatar\n` +
-            `│  ${prefix}baiscope Spider Man\n│\n` +
-            `│  💗 Button select — no typing numbers\n` +
-            `│  ✨ Soft & sweet for you\n│\n` +
+            `│  🌸 ${prefix}baiscope <movie name>\n│\n` +
+            `│  Example:\n` +
+            `│  ${prefix}baiscope Avatar\n│\n` +
+            `│  💗 Interactive menu — no numbers\n│\n` +
             `╰──────────────────────╯\n` +
-            foot(),
+            `_*✰┈ ${BOT_FANCY} ┈✰*_`,
         },
         { quoted: msg }
       );
@@ -353,28 +467,26 @@ module.exports = {
     const query = args.join(' ').trim();
     const loading = await sock.sendMessage(
       from,
-      { text: '🔍💕 *Searching Baiscope for you...*' },
+      { text: '🔍💕 *Searching for you...*' },
       { quoted: msg }
     );
 
     try {
       const results = await searchApi(query);
       await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
-
       if (!results.length) {
         return sock.sendMessage(
           from,
-          { text: '🥺 No results, try another name\n' + foot() },
+          { text: '🥺 No results found' },
           { quoted: msg }
         );
       }
-
-      await sendSearchList({ sock, msg, from, query, results });
+      await sendSearchUI({ sock, msg, from, query, results });
     } catch (err) {
       console.error('Baiscope search:', err.message);
       await sock
         .sendMessage(from, {
-          text: `❌💔 \`${err.message}\`\n` + foot(),
+          text: `❌💔 \`${err.message}\``,
           edit: loading.key,
         })
         .catch(() => {});
