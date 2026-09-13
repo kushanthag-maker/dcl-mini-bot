@@ -1,4 +1,7 @@
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const { pipeline } = require('stream/promises');
 const config = require('../../config');
 
 const API_KEY = 'chama_api_4e25afe0832134994a30b44dd0e9d6d8';
@@ -8,8 +11,6 @@ const SITE = 'https://dark-queen.vercel.app';
 const FOOTER = 'DARK QUEEN OFC';
 const BOT_FANCY = '𝕯𝕬𝕽𝕶 𝕼𝖀𝕰𝕰𝕹 𝕸𝕴𝕹𝕴';
 const PENDING_TTL_MS = 5 * 60 * 1000;
-const MAX_ALL_EPS = 25;
-const EP_DELAY_MS = 2500;
 const CACHE_TTL = 3 * 60 * 1000;
 
 const pending = new Map();
@@ -17,12 +18,6 @@ const infoCache = new Map();
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
-const http = axios.create({
-  timeout: 60000,
-  headers: { 'User-Agent': UA },
-  validateStatus: () => true,
-});
 
 function foot() {
   return (
@@ -34,12 +29,6 @@ function foot() {
     BOT_FANCY +
     ' ┈✰*_'
   );
-}
-
-function sleep(ms) {
-  return new Promise(function (r) {
-    setTimeout(r, ms);
-  });
 }
 
 function setPending(from, state) {
@@ -62,74 +51,86 @@ function clean(s, n) {
 }
 
 function fmtSize(bytes) {
-  if (!bytes || bytes < 1) return 'unknown';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+  if (!bytes || bytes < 1) return '?';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + 'KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(0) + 'MB';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + 'GB';
 }
 
-function pickDirectOptions(full) {
+/** Build FULL quality list from API (direct + page hosts) */
+function buildQualityList(full) {
   var data = (full && full.data) || full || {};
   var downloads = Array.isArray(data.downloads) ? data.downloads : [];
-  var options = [];
-  for (var i = 0; i < downloads.length; i++) {
+  var list = [];
+  var i;
+
+  for (i = 0; i < downloads.length; i++) {
     var d = downloads[i];
-    var url = null;
-    if (d.direct && d.url) url = d.url;
-    else if (d.url && String(d.url).indexOf('/api/v1/download/proxy') !== -1) url = d.url;
-    else if (d.direct_url) url = d.direct_url;
-    if (!url) continue;
-    options.push({
-      label: ((d.quality || 'HD') + ' · ' + (d.language || '') + ' · ' + (d.server || 'File'))
-        .replace(/\s+/g, ' ')
-        .trim(),
+    var raw = d.url || d.link || d.direct_url || d.original_url || null;
+    if (!raw) continue;
+    var isDirect =
+      !!d.direct ||
+      String(raw).indexOf('/api/v1/download/proxy') !== -1 ||
+      /\.mp4(\?|$)/i.test(raw);
+    list.push({
+      label:
+        (d.quality || 'HD') +
+        ' · ' +
+        (d.language || '') +
+        ' · ' +
+        (d.server || d.hoster || 'Host'),
       quality: d.quality || 'HD',
       language: d.language || '',
-      server: d.server || 'Direct',
-      url: url,
+      server: d.server || d.hoster || 'Host',
+      url: raw,
+      direct: isDirect,
     });
   }
+
   if (full && full.direct_download) {
-    var exists = options.some(function (o) {
-      return o.url === full.direct_download;
+    var has = list.some(function (x) {
+      return x.url === full.direct_download;
     });
-    if (!exists) {
-      options.unshift({
-        label: '1080p · Direct · Mediafire',
+    if (!has) {
+      list.unshift({
+        label: '1080p · Direct · Mediafire Proxy',
         quality: '1080p',
         language: '',
         server: 'Mediafire',
         url: full.direct_download,
+        direct: true,
       });
     }
   }
-  var seen = {};
-  return options.filter(function (o) {
-    if (seen[o.url]) return false;
-    seen[o.url] = true;
-    return true;
-  });
-}
 
-function bestOption(options) {
-  if (!options || !options.length) return null;
-  var scored = options.map(function (o, i) {
-    var s = 0;
-    if (/mediafire/i.test(o.server) || /mediafire/i.test(o.url)) s += 5;
-    if (/1080/i.test(o.quality)) s += 3;
-    if (/eng/i.test(o.language) || /eng/i.test(o.label)) s += 2;
-    if (/indo/i.test(o.language)) s += 1;
-    return { o: o, s: s, i: i };
-  });
-  scored.sort(function (a, b) {
-    return b.s - a.s || a.i - b.i;
-  });
-  return scored[0].o;
+  // de-dupe by url
+  var seen = {};
+  return list
+    .map(function (x) {
+      return {
+        label: String(x.label).replace(/\s+/g, ' ').trim(),
+        quality: x.quality,
+        language: x.language,
+        server: x.server,
+        url: x.url,
+        direct: !!x.direct,
+      };
+    })
+    .filter(function (x) {
+      if (seen[x.url]) return false;
+      seen[x.url] = true;
+      return true;
+    });
 }
 
 async function searchApi(query) {
-  var res = await http.get(SEARCH_API, {
+  var res = await axios.get(SEARCH_API, {
     params: { q: query, api_key: API_KEY },
+    timeout: 45000,
+    headers: { 'User-Agent': UA },
+    validateStatus: function () {
+      return true;
+    },
   });
   if (res.status !== 200 || !res.data) throw new Error('Search HTTP ' + res.status);
   if (res.data.status === false) {
@@ -148,7 +149,6 @@ async function searchApi(query) {
         url: r.url || r.link,
         image: r.image || r.poster || null,
         status: r.status || r.type || 'N/A',
-        sub: r.sub || '',
       };
     });
 }
@@ -156,8 +156,13 @@ async function searchApi(query) {
 async function infoApi(pageUrl) {
   var cached = infoCache.get(pageUrl);
   if (cached && Date.now() - cached.at < CACHE_TTL) return cached.data;
-  var res = await http.get(INFO_API, {
+  var res = await axios.get(INFO_API, {
     params: { q: pageUrl, api_key: API_KEY },
+    timeout: 90000,
+    headers: { 'User-Agent': UA },
+    validateStatus: function () {
+      return true;
+    },
   });
   if (res.status !== 200 || !res.data) throw new Error('Info HTTP ' + res.status);
   if (res.data.status === false) {
@@ -167,7 +172,57 @@ async function infoApi(pageUrl) {
   return res.data;
 }
 
-async function sendOneDoc(opts) {
+async function headLen(url) {
+  try {
+    var res = await axios.head(url, {
+      timeout: 25000,
+      maxRedirects: 5,
+      headers: { 'User-Agent': UA, Accept: '*/*' },
+      validateStatus: function () {
+        return true;
+      },
+    });
+    return parseInt(res.headers['content-length'] || '0', 10) || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+/**
+ * Stream URL → disk (not RAM), then Baileys document from file stream.
+ * Note: Baileys encrypt still needs memory ≈ file size once.
+ * We stream download to /tmp to avoid double-buffer during download.
+ */
+async function streamToTempFile(url) {
+  var tmp = path.join(
+    '/tmp',
+    'animexin_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '.mp4'
+  );
+  var res = await axios({
+    method: 'GET',
+    url: url,
+    responseType: 'stream',
+    timeout: 0,
+    maxRedirects: 5,
+    headers: { 'User-Agent': UA, Accept: '*/*' },
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    validateStatus: function (s) {
+      return s >= 200 && s < 400;
+    },
+  });
+  await pipeline(res.data, fs.createWriteStream(tmp));
+  var st = fs.statSync(tmp);
+  return { tmp: tmp, size: st.size };
+}
+
+function safeUnlink(p) {
+  try {
+    if (p && fs.existsSync(p)) fs.unlinkSync(p);
+  } catch (e) {}
+}
+
+async function sendDocumentStreaming(opts) {
   var sock = opts.sock;
   var from = opts.from;
   var option = opts.option;
@@ -175,51 +230,103 @@ async function sendOneDoc(opts) {
   var fileName = opts.fileName;
 
   var safeName = (
-    (fileName && String(fileName).replace(/[\/\\:*?"<>|]/g, '').slice(0, 55)) ||
-    clean(title, 40).replace(/[\/\\:*?"<>|]/g, '') ||
+    (fileName && String(fileName).replace(/[\/\\:*?"<>|]/g, '').slice(0, 50)) ||
+    clean(title, 36).replace(/[\/\\:*?"<>|]/g, '') ||
     'anime'
   ).replace(/\.mp4$/i, '');
 
-  var caption =
-    '╭───「 💖 *ANIMEXIN* 」───╮\n│\n' +
-    '│  👑 *' +
-    clean(title, 42) +
-    '*\n' +
-    '│  🎥 *' +
-    option.quality +
-    '* · ' +
-    option.server +
-    '\n' +
-    (option.language ? '│  🗣️ ' + option.language + '\n' : '') +
-    '│  📁 Document upload…\n│\n' +
-    '╰──────────────────────╯' +
-    foot();
-
-  var linkMsg =
-    '🔗💕 *Backup link*\n' +
-    option.url +
-    '\n\n⏳ Large files may take several minutes.\nIf document fails, open the link.' +
-    foot();
-
-  await sock.sendMessage(from, { text: caption }).catch(function () {});
-  await sock.sendMessage(from, { text: linkMsg }).catch(function () {});
-
-  try {
+  if (!option.direct) {
     await sock.sendMessage(from, {
-      document: { url: option.url },
+      text:
+        '╭───「 💖 *LINK* 」───╮\n│\n' +
+        '│  👑 ' +
+        clean(title, 42) +
+        '\n' +
+        '│  🎥 ' +
+        option.label +
+        '\n│\n' +
+        '│  🔗 ' +
+        option.url +
+        '\n│\n' +
+        '│  ⚠️ This host is not a direct MP4.\n' +
+        '│  Open link in browser.\n' +
+        '╰──────────────────────╯' +
+        foot(),
+    });
+    return { ok: true, mode: 'link' };
+  }
+
+  var sizeHint = await headLen(option.url);
+  await sock.sendMessage(from, {
+    text:
+      '⬆️🌸 *Streaming episode to document...*\n' +
+      '👑 ' +
+      clean(title, 40) +
+      '\n🎥 ' +
+      option.label +
+      (sizeHint ? '\n📦 ~' + fmtSize(sizeHint) : '') +
+      '\n⏳ Please wait (download→upload)' +
+      foot(),
+  });
+
+  var tmp = null;
+  try {
+    // 1) disk stream (low RAM during download)
+    var dl = await streamToTempFile(option.url);
+    tmp = dl.tmp;
+
+    await sock.sendMessage(from, {
+      text: '📤💕 Uploading *' + fmtSize(dl.size) + '* document…',
+    });
+
+    // 2) Baileys send from file stream (cinesubz-style document)
+    await sock.sendMessage(from, {
+      document: { stream: fs.createReadStream(tmp) },
       mimetype: 'video/mp4',
       fileName: safeName + '.mp4',
-      caption: '📁💕 *' + option.label + '*\n> ✦ ' + FOOTER + ' ✦',
+      caption:
+        '📁💕 *' +
+        option.label +
+        '*\n👑 ' +
+        clean(title, 40) +
+        '\n📦 ' +
+        fmtSize(dl.size) +
+        '\n> ✦ ' +
+        FOOTER +
+        ' ✦',
     });
-    return { ok: true };
+
+    safeUnlink(tmp);
+    tmp = null;
+    return { ok: true, mode: 'document', size: dl.size };
   } catch (err) {
-    console.error('[animexin] document fail:', err.message);
-    await sock
-      .sendMessage(from, {
-        text: '❌ Document failed\n`' + err.message + '`\n\n🔗 ' + option.url + foot(),
-      })
-      .catch(function () {});
-    return { ok: false, reason: err.message };
+    safeUnlink(tmp);
+    console.error('[animexin] stream/doc fail:', err.message);
+
+    // Fallback: try direct URL document (Baileys fetches)
+    try {
+      await sock.sendMessage(from, {
+        document: { url: option.url },
+        mimetype: 'video/mp4',
+        fileName: safeName + '.mp4',
+        caption: '📁💕 *' + option.label + '*\n> ✦ ' + FOOTER + ' ✦',
+      });
+      return { ok: true, mode: 'document-url' };
+    } catch (err2) {
+      console.error('[animexin] url doc fail:', err2.message);
+      await sock.sendMessage(from, {
+        text:
+          '❌ Document failed (`' +
+          (err2.message || err.message) +
+          '`)\n\n' +
+          '🔗 Backup link:\n' +
+          option.url +
+          '\n\n' +
+          '⚠️ Server RAM may be too small for this file (Heroku R14).' +
+          foot(),
+      });
+      return { ok: false, reason: err2.message || err.message };
+    }
   }
 }
 
@@ -240,30 +347,14 @@ async function showSeries(ctx) {
     var status = data.status || item.status || 'N/A';
     var type = data.type || 'N/A';
     var total = data.total_episodes || (data.episodes || []).length || 'N/A';
-    var genres = Array.isArray(data.genres)
-      ? Array.from(
-          new Set(
-            data.genres.filter(function (g) {
-              return g && g !== 'Genres';
-            })
-          )
-        )
-          .slice(0, 5)
-          .join(', ')
-      : 'N/A';
-    var story = clean(data.synopsis || data.story || '', 160);
     var episodes = Array.isArray(data.episodes) ? data.episodes : [];
 
     await sock.sendMessage(from, { delete: loading.key }).catch(function () {});
 
     if (!episodes.length) {
-      var options0 = pickDirectOptions(full);
+      var options0 = buildQualityList(full);
       if (!options0.length) {
-        return sock.sendMessage(
-          from,
-          { text: '🥺 No direct links' + foot() },
-          { quoted: msg }
-        );
+        return sock.sendMessage(from, { text: '🥺 No download options' + foot() }, { quoted: msg });
       }
       setPending(from, {
         type: 'quality',
@@ -272,25 +363,7 @@ async function showSeries(ctx) {
         fileName: full.file_name,
         options: options0,
       });
-      var cap0 =
-        '╭───「 💗 *DOWNLOAD* 」───╮\n│\n│  👑 ' +
-        clean(title, 42) +
-        '\n│\n';
-      options0.forEach(function (o, i) {
-        cap0 += '│  *' + (i + 1) + '.* ' + o.label + '\n';
-      });
-      cap0 +=
-        '\n│  👇 *' + prefix + 'animexin <number>*\n╰──────────────────────╯' + foot();
-      if (image) {
-        try {
-          return await sock.sendMessage(
-            from,
-            { image: { url: image }, caption: cap0 },
-            { quoted: msg }
-          );
-        } catch (e) {}
-      }
-      return sock.sendMessage(from, { text: cap0 }, { quoted: msg });
+      return sendQualityList(sock, msg, from, title, image, options0, prefix, '');
     }
 
     setPending(from, {
@@ -301,46 +374,35 @@ async function showSeries(ctx) {
       seriesUrl: item.url,
     });
 
-    var show = episodes.slice(0, 25);
+    var show = episodes.slice(0, 30);
     var caption =
       '╭───「 💖🌸 *ANIMEXIN* 」───╮\n│\n' +
       '│  👑 *' +
       clean(title, 42) +
       '*\n' +
-      '│  💗 Status › ' +
+      '│  💗 ' +
       status +
-      '\n' +
-      '│  🎀 Type › ' +
+      ' · ' +
       type +
-      '\n' +
-      '│  ✨ Genres › ' +
-      clean(genres, 36) +
       '\n' +
       '│  📦 Episodes › ' +
       total +
       '\n│\n' +
-      (story ? '│  📝 ' + story + '\n│\n' : '') +
-      '│  💕 *Episodes (latest first):*\n';
+      '│  💕 *Pick ONE episode:*\n';
 
     show.forEach(function (ep, i) {
       caption += '│  *' + (i + 1) + '.* Ep ' + (ep.episode || i + 1);
       if (ep.date) caption += ' · ' + ep.date;
       caption += '\n';
     });
-
     if (episodes.length > show.length) {
       caption += '│  … +' + (episodes.length - show.length) + ' more\n';
     }
-
     caption +=
       '\n│  👇 *' +
       prefix +
-      'animexin <number>* → one ep\n' +
-      '│  🌸 *' +
-      prefix +
-      'animexin all* → batch (max ' +
-      MAX_ALL_EPS +
-      ')\n' +
+      'animexin <number>*\n' +
+      '│  🌸 Ep by ep → then quality → document\n' +
       '╰──────────────────────╯' +
       foot();
 
@@ -362,6 +424,42 @@ async function showSeries(ctx) {
   }
 }
 
+async function sendQualityList(sock, msg, from, title, image, options, prefix, epTag) {
+  var cap =
+    '╭───「 💗 *QUALITY' +
+    (epTag ? ' · EP ' + epTag : '') +
+    '* 」───╮\n│\n' +
+    '│  👑 ' +
+    clean(title, 42) +
+    '\n│\n' +
+    '│  📥 *All links from API:*\n';
+  options.forEach(function (o, i) {
+    cap +=
+      '│  *' +
+      (i + 1) +
+      '.* ' +
+      o.label +
+      (o.direct ? ' ✅' : ' 🔗') +
+      '\n';
+  });
+  cap +=
+    '\n│  ✅ = direct → WhatsApp document\n' +
+    '│  🔗 = page link only\n' +
+    '│  👇 *' +
+    prefix +
+    'animexin <number>*\n' +
+    '╰──────────────────────╯' +
+    foot();
+
+  if (image && /^https?:\/\//i.test(image)) {
+    try {
+      await sock.sendMessage(from, { image: { url: image }, caption: cap }, { quoted: msg });
+      return;
+    } catch (e) {}
+  }
+  await sock.sendMessage(from, { text: cap }, { quoted: msg });
+}
+
 async function showQualityForEpisode(ctx) {
   var sock = ctx.sock;
   var msg = ctx.msg;
@@ -373,7 +471,7 @@ async function showQualityForEpisode(ctx) {
 
   var loading = await sock.sendMessage(
     from,
-    { text: '🌸💗 *Ep ' + (ep.episode || '') + ' loading...*' },
+    { text: '🌸💗 *Ep ' + (ep.episode || '') + ' qualities...*' },
     { quoted: msg }
   );
 
@@ -383,20 +481,14 @@ async function showQualityForEpisode(ctx) {
     var title =
       data.title || ep.title || (seriesTitle + ' Episode ' + (ep.episode || '')).trim();
     var image = data.image || data.poster || seriesImage;
-    var options = pickDirectOptions(full);
+    var options = buildQualityList(full);
 
     await sock.sendMessage(from, { delete: loading.key }).catch(function () {});
 
     if (!options.length) {
       return sock.sendMessage(
         from,
-        {
-          text:
-            '🥺 No direct file for Ep ' +
-            (ep.episode || '') +
-            '\nOnly host pages (Terabox/Mirror)' +
-            foot(),
-        },
+        { text: '🥺 No qualities for Ep ' + (ep.episode || '') + foot() },
         { quoted: msg }
       );
     }
@@ -414,32 +506,16 @@ async function showQualityForEpisode(ctx) {
       seriesUrl: prev && prev.seriesUrl,
     });
 
-    var cap =
-      '╭───「 💗 *EP ' +
-      (ep.episode || '') +
-      '* 」───╮\n│\n' +
-      '│  👑 ' +
-      clean(title, 42) +
-      '\n│\n' +
-      '│  📥 *Quality:*\n';
-    options.forEach(function (o, i) {
-      cap += '│  *' + (i + 1) + '.* ' + o.label + '\n';
-    });
-    cap +=
-      '\n│  👇 *' +
-      prefix +
-      'animexin <number>*\n' +
-      '│  📁 Document stream\n' +
-      '╰──────────────────────╯' +
-      foot();
-
-    if (image) {
-      try {
-        await sock.sendMessage(from, { image: { url: image }, caption: cap }, { quoted: msg });
-        return;
-      } catch (e) {}
-    }
-    await sock.sendMessage(from, { text: cap }, { quoted: msg });
+    await sendQualityList(
+      sock,
+      msg,
+      from,
+      title,
+      image,
+      options,
+      prefix,
+      String(ep.episode || '')
+    );
   } catch (err) {
     console.error('Animexin ep:', err.message);
     await sock
@@ -451,96 +527,10 @@ async function showQualityForEpisode(ctx) {
   }
 }
 
-async function downloadAllEpisodes(ctx) {
-  var sock = ctx.sock;
-  var msg = ctx.msg;
-  var from = ctx.from;
-  var state = ctx.state;
-  var episodes = (state.episodes || []).slice(0, MAX_ALL_EPS);
-
-  if (!episodes.length) {
-    return sock.sendMessage(from, { text: '🥺 No episodes' + foot() }, { quoted: msg });
-  }
-
-  await sock.sendMessage(
-    from,
-    {
-      text:
-        '🌸💕 *Batch started*\n📦 ' +
-        episodes.length +
-        ' episode(s)\n⏳ Please wait' +
-        foot(),
-    },
-    { quoted: msg }
-  );
-
-  var ok = 0;
-  var fail = 0;
-
-  for (var i = 0; i < episodes.length; i++) {
-    var ep = episodes[i];
-    try {
-      await sock.sendMessage(from, {
-        text: '💗 *' + (i + 1) + '/' + episodes.length + '* · Ep ' + (ep.episode || i + 1) + '…',
-      });
-
-      var full = await infoApi(ep.url);
-      var data = full.data || full;
-      var title =
-        data.title ||
-        ep.title ||
-        (state.title + ' Episode ' + (ep.episode || i + 1)).trim();
-      var options = pickDirectOptions(full);
-      var option = bestOption(options);
-
-      if (!option) {
-        fail++;
-        await sock.sendMessage(from, {
-          text: '⚠️ Ep ' + (ep.episode || i + 1) + ' — no direct link',
-        });
-        continue;
-      }
-
-      await sendOneDoc({
-        sock: sock,
-        from: from,
-        option: option,
-        title: title,
-        fileName: full.file_name,
-      });
-      ok++;
-      if (i < episodes.length - 1) await sleep(EP_DELAY_MS);
-    } catch (err) {
-      fail++;
-      console.error('Animexin all fail:', err.message);
-      await sock
-        .sendMessage(from, {
-          text: '❌ Ep ' + (ep.episode || i + 1) + ': ' + err.message,
-        })
-        .catch(function () {});
-      await sleep(1000);
-    }
-  }
-
-  await sock.sendMessage(
-    from,
-    {
-      text:
-        '╭───「 💖 *DONE* 」───╮\n│\n│  ✅ Sent: *' +
-        ok +
-        '*\n│  ⚠️ Fail: *' +
-        fail +
-        '*\n│\n╰──────────────────────╯' +
-        foot(),
-    },
-    { quoted: msg }
-  );
-}
-
 module.exports = {
   name: 'animexin',
   aliases: ['axin', 'animein', 'animex'],
-  description: 'Search & download Animexin anime',
+  description: 'Animexin episode documents (stream to disk then WA)',
   category: 'download',
 
   async execute(ctx) {
@@ -552,25 +542,20 @@ module.exports = {
     var state = pending.get(from);
 
     try {
-      // .animexin all
       if (args.length === 1 && /^all$/i.test(args[0])) {
-        if (!state || state.type !== 'episodes' || !state.episodes || !state.episodes.length) {
-          return sock.sendMessage(
-            from,
-            {
-              text:
-                '🥺 First select a series\n💡 `' +
-                prefix +
-                'animexin <name>` → number → all' +
-                foot(),
-            },
-            { quoted: msg }
-          );
-        }
-        return downloadAllEpisodes({ sock: sock, msg: msg, from: from, state: state });
+        return sock.sendMessage(
+          from,
+          {
+            text:
+              '⚠️ Use *one episode at a time*\n`' +
+              prefix +
+              'animexin <ep number>`' +
+              foot(),
+          },
+          { quoted: msg }
+        );
       }
 
-      // number
       if (args.length === 1 && /^\d+$/.test(args[0])) {
         var n = parseInt(args[0], 10);
 
@@ -579,7 +564,7 @@ module.exports = {
           if (!item) {
             return sock.sendMessage(
               from,
-              { text: '❌💕 *1*–*' + state.results.length + '*' + foot() },
+              { text: '❌ *1*–*' + state.results.length + '*' + foot() },
               { quoted: msg }
             );
           }
@@ -592,11 +577,7 @@ module.exports = {
             return sock.sendMessage(
               from,
               {
-                text:
-                  '❌💕 *1*–*' +
-                  Math.min(25, state.episodes.length) +
-                  '*' +
-                  foot(),
+                text: '❌ *1*–*' + Math.min(30, state.episodes.length) + '*' + foot(),
               },
               { quoted: msg }
             );
@@ -623,38 +604,34 @@ module.exports = {
           if (!opt) {
             return sock.sendMessage(
               from,
-              { text: '❌💕 *1*–*' + state.options.length + '*' + foot() },
+              { text: '❌ *1*–*' + state.options.length + '*' + foot() },
               { quoted: msg }
             );
           }
-          var loading = await sock.sendMessage(
-            from,
-            { text: '⬆️🌸 *Sending...*' },
-            { quoted: msg }
-          );
-          try {
-            await sock.sendMessage(from, { delete: loading.key }).catch(function () {});
-            await sendOneDoc({
-              sock: sock,
-              from: from,
-              option: opt,
-              title: state.title,
-              fileName: state.fileName,
+          var result = await sendDocumentStreaming({
+            sock: sock,
+            from: from,
+            option: opt,
+            title: state.title,
+            fileName: state.fileName,
+          });
+
+          if (state.episodes) {
+            setPending(from, {
+              type: 'episodes',
+              title: state.seriesTitle || state.title,
+              image: state.seriesImage || state.image,
+              episodes: state.episodes,
+              seriesUrl: state.seriesUrl,
             });
-            if (state.episodes) {
-              setPending(from, {
-                type: 'episodes',
-                title: state.seriesTitle || state.title,
-                image: state.seriesImage || state.image,
-                episodes: state.episodes,
-                seriesUrl: state.seriesUrl,
-              });
-            }
-          } catch (err) {
             await sock
               .sendMessage(from, {
-                text: '❌💔 `' + err.message + '`\n🔗 ' + opt.url + foot(),
-                edit: loading.key,
+                text:
+                  (result && result.ok ? '✅ ' : '⚠️ ') +
+                  'Next ep? `' +
+                  prefix +
+                  'animexin <number>`' +
+                  foot(),
               })
               .catch(function () {});
           }
@@ -676,20 +653,13 @@ module.exports = {
               '╭───「 💖🌸 *ANIMEXIN* 」───╮\n│\n' +
               '│  ' +
               prefix +
-              'animexin <anime name>\n' +
+              'animexin <name>\n' +
               '│  ' +
               prefix +
-              'animexin <number>\n' +
-              '│  ' +
-              prefix +
-              'animexin all\n│\n' +
-              '│  📌 Example:\n' +
-              '│  ' +
-              prefix +
-              'animexin Record Of Mortal\n' +
-              '│  ' +
-              prefix +
-              'animexin 1\n│\n' +
+              'animexin <number>\n│\n' +
+              '│  1 search → 2 series → 3 episode\n' +
+              '│  4 quality (all API options)\n' +
+              '│  5 document stream\n│\n' +
               '╰──────────────────────╯' +
               foot(),
           },
@@ -707,17 +677,10 @@ module.exports = {
       try {
         var results = await searchApi(query);
         await sock.sendMessage(from, { delete: loading2.key }).catch(function () {});
-
         if (!results.length) {
-          return sock.sendMessage(
-            from,
-            { text: '🥺 No results' + foot() },
-            { quoted: msg }
-          );
+          return sock.sendMessage(from, { text: '🥺 No results' + foot() }, { quoted: msg });
         }
-
         setPending(from, { type: 'search', results: results });
-
         var list =
           '╭───「 💖🔍 *SEARCH* 」───╮\n│\n' +
           '│  🔎 *' +
@@ -725,19 +688,13 @@ module.exports = {
           '*\n' +
           '│  📦 ' +
           results.length +
-          ' results\n│\n';
-
+          '\n│\n';
         results.forEach(function (r) {
           list += '│  *' + r.index + '.* ' + clean(r.title, 40) + '\n';
           list += '│      💗 ' + r.status + '\n';
         });
-
         list +=
-          '\n│  👇 *' +
-          prefix +
-          'animexin <number>*\n╰──────────────────────╯' +
-          foot();
-
+          '\n│  👇 *' + prefix + 'animexin <number>*\n╰──────────────────────╯' + foot();
         if (results[0].image) {
           try {
             await sock.sendMessage(
