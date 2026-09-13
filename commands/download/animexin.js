@@ -24,6 +24,41 @@ const http = axios.create({
   validateStatus: () => true,
 });
 
+async function probeSize(url) {
+  try {
+    const res = await http.head(url, {
+      timeout: 25000,
+      maxRedirects: 5,
+      headers: { 'User-Agent': UA, Accept: '*/*' },
+    });
+    const cl = parseInt(res.headers['content-length'] || '0', 10);
+    const ct = String(res.headers['content-type'] || '');
+    return { ok: res.status >= 200 && res.status < 400, size: cl, ct, status: res.status };
+  } catch (e) {
+    try {
+      const res = await http.get(url, {
+        timeout: 30000,
+        maxRedirects: 5,
+        headers: { 'User-Agent': UA, Range: 'bytes=0-1023' },
+        responseType: 'arraybuffer',
+      });
+      const cl = parseInt(res.headers['content-length'] || '0', 10);
+      const ct = String(res.headers['content-type'] || '');
+      return { ok: true, size: cl, ct, status: res.status };
+    } catch (e2) {
+      return { ok: false, size: 0, ct: '', error: e2.message };
+    }
+  }
+}
+
+function fmtSize(bytes) {
+  if (!bytes || bytes < 1) return 'unknown';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+
 function foot() {
   return (
     `\n🌸💕 *Pair:* ${SITE}\n` +
@@ -149,38 +184,81 @@ async function infoApi(pageUrl) {
 
 async function sendOneDoc({ sock, msg, from, option, title, image, fileName }) {
   const safeName = (
-    (fileName && String(fileName).replace(/[\/\\:*?"<>|]/g, '').slice(0, 55)) ||
-    clean(title, 40).replace(/[\/\\:*?"<>|]/g, '') ||
+    (fileName && String(fileName).replace(/[\/\:*?"<>|]/g, '').slice(0, 55)) ||
+    clean(title, 40).replace(/[\/\:*?"<>|]/g, '') ||
     'anime'
   ).replace(/\.mp4$/i, '');
 
+  // Cinesubz-style: probe size first
+  const probe = await probeSize(option.url);
+  const sizeTxt = fmtSize(probe.size);
+  console.log('[animexin] probe', probe.status, probe.ct, sizeTxt, option.url.slice(0, 80));
+
   const caption =
-    `╭───「 💖 *ANIMEXIN* 」───╮\n│\n` +
-    `│  👑 *${clean(title, 42)}*\n` +
-    `│  🎥 *${option.quality}* · ${option.server}\n` +
-    (option.language ? `│  🗣️ ${option.language}\n` : '') +
-    `│  📁 Document\n│\n` +
+    `╭───「 💖 *ANIMEXIN* 」───╮
+│
+` +
+    `│  👑 *${clean(title, 42)}*
+` +
+    `│  🎥 *${option.quality}* · ${option.server}
+` +
+    (option.language ? `│  🗣️ ${option.language}
+` : '') +
+    `│  📦 Size › *${sizeTxt}*
+` +
+    `│  📁 Document (cinesubz style)
+│
+` +
     `╰──────────────────────╯` +
     foot();
 
-  if (image && /^https?:\/\//i.test(image)) {
-    await sock
-      .sendMessage(from, { image: { url: image }, caption }, { quoted: msg })
-      .catch(() => sock.sendMessage(from, { text: caption }, { quoted: msg }));
-  } else {
-    await sock.sendMessage(from, { text: caption }, { quoted: msg }).catch(() => {});
+  // Always give backup link (large files may take long / drop)
+  const linkMsg =
+    `🔗💕 *Backup link*
+${option.url}
+
+` +
+    `⏳ Big files (300MB+) need several minutes.
+` +
+    `If document doesn't arrive, open the link.` +
+    foot();
+
+  await sock.sendMessage(from, { text: caption + '
+' + linkMsg }).catch(() => {});
+
+  // WhatsApp practical limit — still try up to ~1.8GB like cinesubz
+  const MAX = 1.8 * 1024 * 1024 * 1024;
+  if (probe.size > 0 && probe.size > MAX) {
+    await sock.sendMessage(from, {
+      text: `⚠️ File too large for WA document (*${sizeTxt}*). Use backup link above.` + foot(),
+    });
+    return { ok: false, reason: 'too_large' };
   }
 
-  await sock.sendMessage(
-    from,
-    {
+  try {
+    // Same pattern as cinesubz: direct document stream from URL (zero buffer in our code)
+    await sock.sendMessage(from, {
       document: { url: option.url },
       mimetype: 'video/mp4',
       fileName: safeName + '.mp4',
-      caption: `📁💕 *${option.label}*\n> ✦ ${FOOTER} ✦`,
-    },
-    { quoted: msg }
-  );
+      caption: `📁💕 *${option.label}* · ${sizeTxt}
+> ✦ ${FOOTER} ✦`,
+    });
+    return { ok: true, size: probe.size };
+  } catch (err) {
+    console.error('[animexin] document send fail:', err.message);
+    await sock.sendMessage(from, {
+      text:
+        `❌ Document upload failed
+\`${err.message}\`
+
+` +
+        `🔗 Use backup link:
+${option.url}` +
+        foot(),
+    });
+    return { ok: false, reason: err.message };
+  }
 }
 
 async function showSeries({ sock, msg, from, item }) {
