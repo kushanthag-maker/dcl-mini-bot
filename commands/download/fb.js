@@ -1,167 +1,271 @@
 const axios = require('axios');
+const config = require('../../config');
 
-const API =
-  'https://uzwid-52-12-117-99.run.pinggy-free.link/v1/fb/video';
+const API = 'https://sadewapi.up.railway.app/api/facebook/download';
+const THUMB = 'https://files.catbox.moe/gi50va.jpg';
+const SITE = 'https://dark-queen.vercel.app';
+const FOOTER = 'DARK QUEEN OFC';
+const BOT_FANCY = '𝕯𝕬𝕽𝕶 𝕼𝖀𝕰𝕰𝕹 𝕸𝕴𝕹𝕴';
 
-function formatDuration(sec) {
-  const n = Math.floor(Number(sec) || 0);
-  const m = Math.floor(n / 60);
-  const s = n % 60;
-  return `\( {m}: \){s.toString().padStart(2, '0')}`;
+function foot() {
+  return (
+    '\n🌸💕 *Pair:* ' +
+    SITE +
+    '\n> ✦ ' +
+    FOOTER +
+    ' ✦\n_*✰┈ ' +
+    BOT_FANCY +
+    ' ┈✰*_'
+  );
 }
 
-function formatViews(v) {
-  const n = Number(v) || 0;
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-  return String(n);
+function isFbUrl(s) {
+  if (!s) return false;
+  return /facebook\.com|fb\.watch|fb\.com|fburl/i.test(s);
+}
+
+function pickMedia(data) {
+  if (!data) return { title: null, thumb: null, videos: [] };
+  const root = data.result || data.data || data;
+  const title =
+    root.title || root.caption || data.title || 'Facebook Video';
+  const thumb =
+    root.thumbnail ||
+    root.thumb ||
+    root.image ||
+    root.picture ||
+    data.thumbnail ||
+    null;
+
+  const videos = [];
+  const push = (url, label) => {
+    if (url && /^https?:\/\//i.test(url)) {
+      videos.push({ url, label: label || 'Video' });
+    }
+  };
+
+  // common shapes
+  if (typeof root === 'string' && /^https?:\/\//i.test(root)) {
+    push(root, 'Video');
+  }
+  push(root.hd || root.hdUrl || root.video_hd || root.high, 'HD');
+  push(root.sd || root.sdUrl || root.video_sd || root.low || root.normal, 'SD');
+  push(root.url || root.video || root.videoUrl || root.download, 'Video');
+  push(root.mp4, 'MP4');
+
+  if (Array.isArray(root.videos)) {
+    root.videos.forEach((v, i) => {
+      if (typeof v === 'string') push(v, 'Video ' + (i + 1));
+      else push(v?.url || v?.link, v?.quality || v?.resolution || 'Video');
+    });
+  }
+  if (Array.isArray(root.media)) {
+    root.media.forEach((v, i) => {
+      push(v?.url || v?.link || v, v?.quality || 'Media ' + (i + 1));
+    });
+  }
+  if (Array.isArray(data.links)) {
+    data.links.forEach((v, i) => {
+      push(v?.url || v, v?.quality || 'Link ' + (i + 1));
+    });
+  }
+
+  // de-dupe
+  const seen = {};
+  const uniq = videos.filter((v) => {
+    if (seen[v.url]) return false;
+    seen[v.url] = true;
+    return true;
+  });
+
+  return { title: String(title).slice(0, 120), thumb, videos: uniq };
+}
+
+async function sendBanner(sock, from, msg, caption) {
+  try {
+    await sock.sendMessage(
+      from,
+      { image: { url: THUMB }, caption },
+      { quoted: msg }
+    );
+  } catch (_) {
+    await sock.sendMessage(from, { text: caption }, { quoted: msg });
+  }
 }
 
 module.exports = {
   name: 'fb',
-  aliases: ['facebook', 'fbdl'],
+  aliases: ['facebook', 'fbdl', 'fbdown'],
   description: 'Download Facebook video',
   category: 'download',
+
   async execute({ sock, msg, from, args }) {
-    if (!args.length) {
-      return sock.sendMessage(from, {
-        text: `╭───「 📘 *FB DOWNLOAD* 」───╮
-│
-│  ❌ *Usage:*
-│  .fb <facebook url>
-│
-│  📌 *Example:*
-│  .fb https://www.facebook.com/share/v/xxxxx
-│
-╰──────────────────────╯`,
-      }, { quoted: msg });
+    const prefix = config.prefix || '.';
+
+    if (!args || !args.length) {
+      return sendBanner(
+        sock,
+        from,
+        msg,
+        '╭───「 💖📥 *FACEBOOK* 」───╮\n│\n' +
+          '│  📌 Usage:\n' +
+          '│  ' +
+          prefix +
+          'fb <facebook link>\n│\n' +
+          '│  🌸 Example:\n' +
+          '│  ' +
+          prefix +
+          'fb https://fb.watch/xxxx\n│\n' +
+          '╰──────────────────────╯' +
+          foot()
+      );
     }
 
-    const url = args.join(' ').trim();
-    if (!/facebook\.com|fb\.watch/i.test(url)) {
-      return sock.sendMessage(from, {
-        text: '❌ Valid Facebook link එකක් දෙන්න.',
-      }, { quoted: msg });
+    const url = args.find((a) => isFbUrl(a)) || args[0];
+    if (!isFbUrl(url) && !/^https?:\/\//i.test(url)) {
+      return sendBanner(
+        sock,
+        from,
+        msg,
+        '❌💕 Invalid Facebook link\n💡 ' + prefix + 'fb <link>' + foot()
+      );
     }
 
-    const loading = await sock.sendMessage(from, {
-      text: '📘 *Facebook video ලබාගනිමින්...*',
-    }, { quoted: msg });
+    await sendBanner(
+      sock,
+      from,
+      msg,
+      '╭───「 💖📥 *FACEBOOK* 」───╮\n│\n' +
+        '│  ⏳ *Downloading for you...*\n' +
+        '│  🌸 Please wait\n│\n' +
+        '╰──────────────────────╯' +
+        foot()
+    );
 
     try {
-      const { data, status } = await axios.get(API, {
+      const res = await axios.get(API, {
         params: { url },
-        timeout: 60000,
+        timeout: 90000,
+        headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
         validateStatus: () => true,
       });
 
-      if (status !== 200 || !data?.success || !data?.data) {
-        return sock.sendMessage(from, {
-          text: '❌ Video එක ගන්න බැරි වුණා. Link එක publicද බලන්න.',
-          edit: loading.key,
-        }).catch(() =>
-          sock.sendMessage(from, {
-            text: '❌ Video එක ගන්න බැරි වුණා. Link එක publicද බලන්න.',
-          }, { quoted: msg })
+      if (res.status !== 200 || !res.data) {
+        return sendBanner(
+          sock,
+          from,
+          msg,
+          '❌💔 API error HTTP ' + res.status + foot()
         );
       }
 
-      const v = data.data;
-      const videoUrl = v.hd_url || v.sd_url;
-      if (!videoUrl) {
-        return sock.sendMessage(from, {
-          text: '❌ Download link එකක් හමු නොවීය.',
-          edit: loading.key,
-        }).catch(() => {});
-      }
-
-      const quality = v.hd_url ? 'HD' : 'SD';
-      const caption = `
-╭───「 📘 *FB VIDEO* 」───╮
-│
-│  📌 *Title*     ›  ${v.title || 'Facebook Video'}
-│  👤 *Uploader*  ›  ${(v.uploader || '—').trim()}
-│  ⏱️ *Duration*  ›  ${formatDuration(v.duration)}
-│  👀 *Views*     ›  ${formatViews(v.views)}
-│  📺 *Quality*   ›  ${quality}
-│
-│  📥 *Downloading...*
-│
-╰──────────────────────╯`.trim();
-
-      await sock.sendMessage(from, { delete: loading.key }).catch(() => {});
-
-      if (v.thumbnail) {
-        await sock.sendMessage(from, {
-          image: { url: v.thumbnail },
-          caption,
-        }, { quoted: msg }).catch(() =>
-          sock.sendMessage(from, { text: caption }, { quoted: msg })
+      if (res.data.status === false || res.data.success === false) {
+        return sendBanner(
+          sock,
+          from,
+          msg,
+          '❌💔 ' +
+            (res.data.msg || res.data.message || res.data.error || 'Download failed') +
+            foot()
         );
-      } else {
-        await sock.sendMessage(from, { text: caption }, { quoted: msg });
       }
 
-      const sending = await sock.sendMessage(from, {
-        text: '📥 *Video buffer වෙමින්...*',
-      }, { quoted: msg });
+      const { title, thumb, videos } = pickMedia(res.data);
 
-      // Prefer HD, fallback SD if HD is too big / fails
-      let buffer = null;
-      let used = quality;
+      if (!videos.length) {
+        return sendBanner(
+          sock,
+          from,
+          msg,
+          '🥺 No video link found\nTry another post' + foot()
+        );
+      }
 
-      const tryDownload = async (link) => {
-        const res = await axios.get(link, {
-          responseType: 'arraybuffer',
-          timeout: 180000,
-          maxContentLength: 80 * 1024 * 1024,
-          maxBodyLength: 80 * 1024 * 1024,
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          },
-        });
-        return Buffer.from(res.data);
-      };
+      // prefer HD then first
+      const best =
+        videos.find((v) => /hd/i.test(v.label)) ||
+        videos[0];
 
+      const info =
+        '╭───「 💖📥 *FACEBOOK* 」───╮\n│\n' +
+        '│  👑 *' +
+        (title || 'Facebook Video') +
+        '*\n' +
+        '│  🎥 Quality › *' +
+        best.label +
+        '*\n' +
+        '│  💕 Sending video...\n│\n' +
+        '╰──────────────────────╯' +
+        foot();
+
+      // info with your banner image
+      await sendBanner(sock, from, msg, info);
+
+      // optional API thumb
+      if (thumb && /^https?:\/\//i.test(thumb)) {
+        await sock
+          .sendMessage(
+            from,
+            {
+              image: { url: thumb },
+              caption: '🖼️ *Preview*\n> ✦ ' + FOOTER + ' ✦',
+            },
+            { quoted: msg }
+          )
+          .catch(() => {});
+      }
+
+      // send video (direct url stream)
       try {
-        buffer = await tryDownload(videoUrl);
-      } catch (e) {
-        if (v.hd_url && v.sd_url && videoUrl === v.hd_url) {
-          used = 'SD';
-          buffer = await tryDownload(v.sd_url);
-        } else {
-          throw e;
+        await sock.sendMessage(
+          from,
+          {
+            video: { url: best.url },
+            caption:
+              '📁💕 *' +
+              (title || 'FB Video') +
+              '*\n🎥 ' +
+              best.label +
+              '\n> ✦ ' +
+              FOOTER +
+              ' ✦',
+          },
+          { quoted: msg }
+        );
+      } catch (e1) {
+        // fallback document
+        try {
+          await sock.sendMessage(
+            from,
+            {
+              document: { url: best.url },
+              mimetype: 'video/mp4',
+              fileName: 'facebook.mp4',
+              caption: '📁 *FB Video*\n> ✦ ' + FOOTER + ' ✦',
+            },
+            { quoted: msg }
+          );
+        } catch (e2) {
+          await sendBanner(
+            sock,
+            from,
+            msg,
+            '⚠️ Upload failed — use link:\n' + best.url + foot()
+          );
         }
       }
 
-      if (!buffer || buffer.length < 1000) {
-        return sock.sendMessage(from, {
-          text: '❌ Video file එක invalid.',
-          edit: sending.key,
-        }).catch(() => {});
+      // other qualities as links
+      if (videos.length > 1) {
+        let extra = '🔗 *Other qualities:*\n';
+        videos.forEach((v, i) => {
+          extra += '*' + (i + 1) + '.* ' + v.label + '\n' + v.url + '\n';
+        });
+        await sock.sendMessage(from, { text: extra + foot() }, { quoted: msg });
       }
-
-      const sizeMB = (buffer.length / 1024 / 1024).toFixed(2);
-
-      await sock.sendMessage(from, { delete: sending.key }).catch(() => {});
-
-      await sock.sendMessage(from, {
-        video: buffer,
-        mimetype: 'video/mp4',
-        fileName: `${String(v.title || 'fb-video').substring(0, 40)}.mp4`,
-        caption: `✅ *${v.title || 'Facebook Video'}*\n📺 ${used} • 📦 ${sizeMB} MB`,
-      }, { quoted: msg });
     } catch (err) {
-      console.error('FB Error:', err.message);
-      await sock.sendMessage(from, {
-        text: `❌ දෝෂයක් ඇතිවිය.\n\n\`${err.message}\`\n\n💡 Video එක ලොකු නම් fail වෙන්න පුළුවන්.`,
-        edit: loading.key,
-      }).catch(() =>
-        sock.sendMessage(from, {
-          text: `❌ දෝෂයක් ඇතිවිය.\n\`${err.message}\``,
-        }, { quoted: msg })
-      );
+      console.error('[fb]', err.message);
+      await sendBanner(sock, from, msg, '❌💔 `' + err.message + '`' + foot());
     }
   },
 };
