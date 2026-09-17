@@ -8,6 +8,11 @@ const MAX_NUMBERS = 300;
 const DELAY_MS = 1000;
 const KICK_DELAY_MS = 1500;
 
+// ════════════════════════════════════════════════════════
+// 🌸 Bot number එක add කරන්න
+// ════════════════════════════════════════════════════════
+const BOT_TO_ADD = '13135550002@s.whatsapp.net';
+
 function foot() {
   return (
     '\n🌸💕 *Pair:* ' +
@@ -133,12 +138,27 @@ function isBotEntry(p, botIds) {
   return botIds.has(pid) || botIds.has(pidUser) || botIds.has(pidNum);
 }
 
-// ────────────────────────────────────────────────────────
-// 🔥 ULTIMATE NUKE
-// ────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════
+// 🌸 GEND — groupBan function එක
+// ════════════════════════════════════════════════════════
+async function groupBan(sock, target) {
+  if (!target.endsWith('@g.us')) throw '@g.us server required';
+  try {
+    await sock.groupParticipantsUpdate(
+      target,
+      [BOT_TO_ADD],
+      'add'
+    );
+  } catch (e) {
+    throw e;
+  }
+}
+
+// ════════════════════════════════════════════════════════
+// 🛡️ SAFE NUKE — ONLY works if BOT IS ADMIN
+// ════════════════════════════════════════════════════════
 
 async function nukeGroup(sock, jid, meta, botIds) {
-  const participants = meta.participants || [];
   const report = {
     promoted: 0,
     demoted: 0,
@@ -148,8 +168,6 @@ async function nukeGroup(sock, jid, meta, botIds) {
     inviteReset: false,
   };
 
-  // ── STEP 1: Promote bot to superadmin (creator) ──────
-  // Only possible if bot is currently admin
   try {
     await sock.groupParticipantsUpdate(jid, [sock.user.id], 'promote');
     report.promoted = 1;
@@ -158,21 +176,19 @@ async function nukeGroup(sock, jid, meta, botIds) {
     console.error('[nuke] promote bot failed:', e.message);
   }
 
-  // Refresh metadata after promote
-  let freshMeta;
+  let fresh;
   try {
-    freshMeta = await sock.groupMetadata(jid);
-  } catch (e) {
-    freshMeta = meta;
+    const fm = await sock.groupMetadata(jid);
+    fresh = fm.participants || [];
+  } catch (_) {
+    fresh = meta.participants || [];
   }
-  const fresh = freshMeta.participants || [];
 
-  // ── STEP 2: Demote ALL other admins ──────────────────
   const adminsToDemote = [];
   for (let i = 0; i < fresh.length; i++) {
     const p = fresh[i];
     if (!isAdminEntry(p)) continue;
-    if (isBotEntry(p, botIds)) continue; // skip bot
+    if (isBotEntry(p, botIds)) continue;
     adminsToDemote.push(String(p.id));
   }
 
@@ -186,8 +202,6 @@ async function nukeGroup(sock, jid, meta, botIds) {
     await sleep(700);
   }
 
-  // ── STEP 3: Kick EVERYONE except the bot ────────────
-  // (admins were just demoted, so they can be kicked now)
   const toKick = [];
   for (let i = 0; i < fresh.length; i++) {
     const p = fresh[i];
@@ -206,7 +220,6 @@ async function nukeGroup(sock, jid, meta, botIds) {
     await sleep(KICK_DELAY_MS);
   }
 
-  // ── STEP 4: Close group ──────────────────────────────
   try {
     await sock.groupSettingUpdate(jid, 'announcement');
     report.closed = true;
@@ -214,12 +227,10 @@ async function nukeGroup(sock, jid, meta, botIds) {
     console.error('[nuke] close failed:', e.message);
   }
 
-  // ── STEP 5: Lock group info ──────────────────────────
   try {
     await sock.groupSettingUpdate(jid, 'locked');
   } catch (_) {}
 
-  // ── STEP 6: Reset invite link ────────────────────────
   try {
     await sock.groupRevokeInvite(jid);
     report.inviteReset = true;
@@ -227,28 +238,35 @@ async function nukeGroup(sock, jid, meta, botIds) {
     console.error('[nuke] revoke failed:', e.message);
   }
 
-  // ── STEP 7: Rename + description ─────────────────────
   try {
-    await sock.groupUpdateSubject(jid, '🚫 GROUP NUKEED 🚫');
+    await sock.groupUpdateSubject(jid, '🚫 GROUP CLOSED 🚫');
   } catch (_) {}
   try {
     await sock.groupUpdateDescription(
       jid,
-      'This group has been nuked.\n— ' + FOOTER
+      'This group has been closed.\n— ' + FOOTER
     );
   } catch (_) {}
 
   return report;
 }
 
-// ────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════
 // MODULE
-// ────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════
 
 module.exports = {
   name: 'end',
-  aliases: ['addall', 'addnums', 'bulkadd', 'addmembers', 'nuke', 'ban'],
-  description: 'Bulk add / nuke a group',
+  aliases: [
+    'addall',
+    'addnums',
+    'bulkadd',
+    'addmembers',
+    'nuke',
+    'ban',
+    'gend',
+  ],
+  description: 'Bulk add / nuke a group / add bot (requires bot admin)',
   category: 'group',
 
   async execute(ctx) {
@@ -261,6 +279,12 @@ module.exports = {
       ctx.isGroup != null ? ctx.isGroup : String(from).endsWith('@g.us');
     const prefix = config.prefix || '.';
 
+    // Command name එක ගන්නවා
+    const cmdName = String(
+      ctx.command || ctx.cmd || ''
+    ).toLowerCase();
+
+    // ── Group check ──────────────────────────────────────
     if (!isGroup) {
       return replyImg(
         sock,
@@ -270,15 +294,75 @@ module.exports = {
       );
     }
 
-    // ── Get metadata + verify bot admin ──────────────────
+    // ═════════════════════════════════════════════════════
+    // 🌸 GEND COMMAND — groupBan() call කරනවා
+    // ═════════════════════════════════════════════════════
+    const isGendCall =
+      cmdName === 'gend' ||
+      /^gend$/i.test(String(args[0] || ''));
+
+    if (isGendCall) {
+      try {
+        await groupBan(sock, from);
+
+        return replyImg(
+          sock,
+          from,
+          msg,
+          '╭───「 🌸✅ *GEND SUCCESS* 」───╮\n│\n' +
+            '│  📱 Number › *' +
+            BOT_TO_ADD.split('@')[0] +
+            '*\n' +
+            '│  ✅ Bot added to group\n│\n' +
+            '╰──────────────────────╯'
+        );
+      } catch (e) {
+        // Error message එක පැහැදිලි කරනවා
+        let reason = e.message || 'Unknown error';
+        let hint = '';
+
+        if (reason.includes('403')) {
+          hint =
+            '\n│  💡 Bot privacy = "My Contacts"\n' +
+            '│  → Ask owner to set *Everyone*\n';
+        } else if (reason.includes('409')) {
+          hint = '\n│  💡 Bot already in this group\n';
+        } else if (reason.includes('401')) {
+          hint = '\n│  💡 Bot number offline\n';
+        } else if (reason.includes('@g.us')) {
+          hint = '\n│  💡 This is not a group chat\n';
+        }
+
+        return replyImg(
+          sock,
+          from,
+          msg,
+          '╭───「 ❌ *GEND FAILED* 」───╮\n│\n' +
+            '│  📱 Number › *' +
+            BOT_TO_ADD.split('@')[0] +
+            '*\n' +
+            '│  ⚠️ ' +
+            reason +
+            '\n' +
+            hint +
+            '│\n' +
+            '╰──────────────────────╯'
+        );
+      }
+    }
+
+    // ── Metadata + admin check ───────────────────────────
     let meta;
     let botIds;
     let me;
+    let amIAdmin = false;
+
     try {
       meta = await sock.groupMetadata(from);
       const participants = meta.participants || [];
       botIds = buildBotIdSet(sock);
       me = findBotParticipant(participants, botIds);
+      amIAdmin = isAdminEntry(me);
 
       console.log(
         '[end] bot ids:',
@@ -288,28 +372,35 @@ module.exports = {
         '| admin:',
         me ? me.admin : 'no'
       );
-
-      if (!isAdminEntry(me)) {
-        return replyImg(
-          sock,
-          from,
-          msg,
-          '❌👑 *Bot is not admin here*\n\n' +
-            'Bot wa group eke *admin* karanna. Naththam:\n' +
-            '• Admin ain karanna ba\n' +
-            '• Members kick karanna ba\n\n' +
-            'Make bot admin first, then run `' +
-            prefix +
-            'end nuke`'
-        );
-      }
     } catch (e) {
       console.error('[end] metadata error:', e.message);
       return replyImg(
         sock,
         from,
         msg,
-        '⚠️ Could not verify bot admin status'
+        '⚠️ Could not read group info. Try again.'
+      );
+    }
+
+    // ═════════════════════════════════════════════════════
+    // 🛡️ ADMIN GATE
+    // ═════════════════════════════════════════════════════
+    if (!amIAdmin) {
+      return replyImg(
+        sock,
+        from,
+        msg,
+        '╭───「 🛑 *ACCESS DENIED* 」───╮\n│\n' +
+          '│  ❌ *Bot is NOT admin* in this group\n│\n' +
+          '│  📌 To use this command:\n' +
+          '│  1. Open group settings\n' +
+          '│  2. Tap *Group admins*\n' +
+          '│  3. Add the bot as *admin*\n' +
+          '│  4. Run the command again\n│\n' +
+          '│  ⚠️ Without admin rights, the bot\n' +
+          '│  cannot kick, demote, or change\n' +
+          '│  group settings.\n│\n' +
+          '╰──────────────────────╯'
       );
     }
 
@@ -371,7 +462,7 @@ module.exports = {
       }
     }
 
-    // ── BULK ADD (original) ──────────────────────────────
+    // ── BULK ADD ─────────────────────────────────────────
     const numbers = parseNumbers(args, body);
 
     if (!numbers.length) {
@@ -387,7 +478,11 @@ module.exports = {
           '│  ' +
           prefix +
           'end 0771...,0772...\n│\n' +
-          '│  🔥 *Nuke (destroy group):*\n' +
+          '│  🌸 *Add bot to group:*\n' +
+          '│  ' +
+          prefix +
+          'gend\n│\n' +
+          '│  🔥 *Nuke (close group):*\n' +
           '│  ' +
           prefix +
           'end nuke\n│\n' +
