@@ -76,6 +76,61 @@ function parseNumbers(args, body) {
   return list;
 }
 
+/**
+ * Build a Set of all possible ID formats for the bot.
+ * Handles both @s.whatsapp.net and @lid formats (Baileys MD).
+ */
+function buildBotIdSet(sock) {
+  const set = new Set();
+  const rawId = sock.user?.id || '';
+  const rawLid = sock.user?.lid || '';
+
+  [rawId, rawLid].forEach(function (v) {
+    if (!v) return;
+    const s = String(v);
+    const userPart = s.split('@')[0];          // 94771234567:5
+    const numPart = userPart.split(':')[0];     // 94771234567
+
+    set.add(s);                                 // full jid
+    set.add(userPart);                          // 94771234567:5
+    set.add(numPart);                           // 94771234567
+    set.add(numPart + '@s.whatsapp.net');       // 94771234567@s.whatsapp.net
+    set.add(numPart + '@lid');                  // 94771234567@lid
+  });
+
+  return set;
+}
+
+/**
+ * Find the bot's participant entry from group metadata.
+ * Matches against id, lid, phone number, or jid formats.
+ */
+function findBotParticipant(participants, botIds) {
+  for (let i = 0; i < participants.length; i++) {
+    const p = participants[i];
+    const pid = String(p.id || '');
+    const plid = String(p.lid || '');
+
+    const pidUser = pid.split('@')[0];
+    const pidNum = pidUser.split(':')[0];
+    const plidUser = plid.split('@')[0];
+    const plidNum = plidUser.split(':')[0];
+
+    // Exact match with any known bot id format
+    if (
+      botIds.has(pid) ||
+      botIds.has(plid) ||
+      botIds.has(pidUser) ||
+      botIds.has(plidUser) ||
+      botIds.has(pidNum) ||
+      botIds.has(plidNum)
+    ) {
+      return p;
+    }
+  }
+  return null;
+}
+
 module.exports = {
   name: 'end',
   aliases: ['addall', 'addnums', 'bulkadd', 'addmembers'],
@@ -88,9 +143,11 @@ module.exports = {
     const from = ctx.from;
     const args = ctx.args || [];
     const body = ctx.body || '';
-    const isGroup = ctx.isGroup != null ? ctx.isGroup : String(from).endsWith('@g.us');
+    const isGroup =
+      ctx.isGroup != null ? ctx.isGroup : String(from).endsWith('@g.us');
     const prefix = config.prefix || '.';
 
+    // ── 1. Group check ────────────────────────────────────
     if (!isGroup) {
       return replyImg(
         sock,
@@ -102,6 +159,7 @@ module.exports = {
       );
     }
 
+    // ── 2. Parse numbers ──────────────────────────────────
     const numbers = parseNumbers(args, body);
 
     if (!numbers.length) {
@@ -127,15 +185,25 @@ module.exports = {
       );
     }
 
+    // ── 3. Admin check (FIXED) ────────────────────────────
     try {
       const meta = await sock.groupMetadata(from);
-      const botId = sock.user?.id || '';
-      const botLid = botId.split(':')[0].split('@')[0];
-      const me = (meta.participants || []).find(function (p) {
-        const id = String(p.id || '');
-        return id.includes(botLid) || id === botId;
-      });
-      const isAdmin = me && (me.admin === 'admin' || me.admin === 'superadmin');
+      const participants = meta.participants || [];
+
+      const botIds = buildBotIdSet(sock);
+      const me = findBotParticipant(participants, botIds);
+
+      // Debug log — helpu diagnose issues
+      console.log(
+        '[end] bot ids:',
+        Array.from(botIds),
+        '| matched:',
+        me ? me.id : 'NONE'
+      );
+
+      const isAdmin =
+        me && (me.admin === 'admin' || me.admin === 'superadmin');
+
       if (!isAdmin) {
         return replyImg(
           sock,
@@ -145,9 +213,16 @@ module.exports = {
         );
       }
     } catch (e) {
-      console.error('[end] metadata', e.message);
+      console.error('[end] metadata error:', e.message);
+      return replyImg(
+        sock,
+        from,
+        msg,
+        '⚠️ Could not verify bot admin status\nPlease try again in a moment'
+      );
     }
 
+    // ── 4. Start message ──────────────────────────────────
     const total = numbers.length;
     await replyImg(
       sock,
@@ -165,6 +240,7 @@ module.exports = {
         '╰──────────────────────╯'
     );
 
+    // ── 5. Add loop ───────────────────────────────────────
     let ok = 0;
     let fail = 0;
     const failed = [];
@@ -175,7 +251,9 @@ module.exports = {
       try {
         const res = await sock.groupParticipantsUpdate(from, [jid], 'add');
         const status =
-          Array.isArray(res) && res[0] ? String(res[0].status || res[0]) : '200';
+          Array.isArray(res) && res[0]
+            ? String(res[0].status || res[0])
+            : '200';
         if (status === '200' || status === '202') {
           ok++;
         } else {
@@ -185,7 +263,7 @@ module.exports = {
       } catch (err) {
         fail++;
         failed.push(num + ' (err)');
-        console.error('[end] add', num, err.message);
+        console.error('[end] add failed', num, err.message);
       }
 
       if ((i + 1) % 25 === 0 || i === numbers.length - 1) {
@@ -193,13 +271,21 @@ module.exports = {
           sock,
           from,
           null,
-          '💗 Progress *' + (i + 1) + '/' + total + '* · ✅' + ok + ' · ❌' + fail
+          '💗 Progress *' +
+            (i + 1) +
+            '/' +
+            total +
+            '* · ✅' +
+            ok +
+            ' · ❌' +
+            fail
         );
       }
 
       if (i < numbers.length - 1) await sleep(DELAY_MS);
     }
 
+    // ── 6. Final report ───────────────────────────────────
     let done =
       '╭───「 💖✅ *DONE* 」───╮\n│\n' +
       '│  📦 Total › *' +
