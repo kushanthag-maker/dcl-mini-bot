@@ -1,8 +1,9 @@
 const axios = require('axios');
 const config = require('../../config');
 
-const SEARCH_API = 'https://sadewapi.up.railway.app/api/cinesubz/search';
-const DL_API = 'https://sadewapi.up.railway.app/api/cinesubz/movidl';
+const API_KEY = 'chama_api_4e25afe0832134994a30b44dd0e9d6d8';
+const SEARCH_API = 'https://api.chamindu.site/api/v1/movie/cinesubz/search';
+const INFO_API = 'https://api.chamindu.site/api/v1/movie/cinesubz/infodl';
 const THUMB = 'https://files.catbox.moe/7zd2gf.webp';
 const SITE = 'https://dark-queen.vercel.app';
 const DEFAULT_FOOTER = 'DARK QUEEN OFC';
@@ -17,12 +18,11 @@ function getFooter(from) {
 }
 
 function foot(from) {
-  const f = getFooter(from);
   return (
     '\n🌸💕 *Pair:* ' +
     SITE +
     '\n> ✦ ' +
-    f +
+    getFooter(from) +
     ' ✦\n_*✰┈ ' +
     BOT_FANCY +
     ' ┈✰*_'
@@ -42,7 +42,6 @@ function clean(s, n) {
   n = n || 60;
   const t = String(s || '')
     .replace(/&amp;/g, '&')
-    .replace(/&#39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim();
   return t.length > n ? t.slice(0, n) + '…' : t;
@@ -65,36 +64,26 @@ async function replyImg(sock, from, msg, text) {
   }
 }
 
-/** Collect direct download options from any shape */
-function extractDownloads(node) {
+function isDirectLink(url) {
+  if (!url || !/^https?:\/\//i.test(url)) return false;
+  if (/telegram\.me|t\.me\//i.test(url)) return false;
+  return true;
+}
+
+function extractDownloads(data) {
+  const list = Array.isArray(data?.downloads) ? data.downloads : [];
   const out = [];
-  if (!node) return out;
-
-  const list = Array.isArray(node)
-    ? node
-    : Array.isArray(node.downloads)
-      ? node.downloads
-      : [];
-
   for (let i = 0; i < list.length; i++) {
     const d = list[i];
     if (!d) continue;
-    const url =
-      d.resolvedUrl ||
-      d.resolved_url ||
-      d.directUrl ||
-      d.direct ||
-      d.downloadUrl ||
-      d.url ||
-      d.link ||
-      null;
-    if (!url || !/^https?:\/\//i.test(url)) continue;
-    // skip non-media host pages if only zt without resolve — still allow csplayer/drive
+    const url = d.link || d.url || d.direct || d.resolvedUrl || null;
+    if (!url) continue;
     out.push({
-      label: d.label || 'Download',
-      meta: d.meta || d.quality || d.label || 'Video',
-      resolvedUrl: url,
-      ztLink: d.ztLink || null,
+      quality: d.quality || d.label || 'Video',
+      size: d.size || '',
+      language: d.language || '',
+      url: url,
+      direct: isDirectLink(url),
     });
   }
   return out;
@@ -102,7 +91,7 @@ function extractDownloads(node) {
 
 async function searchApi(q) {
   const res = await axios.get(SEARCH_API, {
-    params: { q: q },
+    params: { q: q, api_key: API_KEY },
     timeout: 45000,
     headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
     validateStatus: function () {
@@ -110,30 +99,26 @@ async function searchApi(q) {
     },
   });
   if (res.status !== 200 || !res.data) throw new Error('Search HTTP ' + res.status);
-  if (res.data.success === false) {
-    throw new Error(res.data.message || res.data.error || 'Search failed');
+  if (res.data.status === false) {
+    throw new Error(res.data.error || res.data.message || 'Search failed');
   }
-  const list = Array.isArray(res.data.result) ? res.data.result : [];
+  const list = Array.isArray(res.data.data) ? res.data.data : [];
   return list.slice(0, 12).map(function (r, i) {
     return {
       index: i + 1,
-      id: r.id,
       title: r.title || 'Untitled',
-      url: r.url,
-      img: r.img || null,
-      imdb: r.imdb || '',
-      date: r.date || '',
-      runtime: r.runtime || '',
-      genres: r.genres || '',
-      quality: r.quality || '',
+      url: r.link || r.url,
+      img: r.image || r.img || null,
       type: r.type || '',
+      quality: r.quality || '',
+      rating: r.rating || '',
     };
   });
 }
 
 async function infoApi(pageUrl) {
-  const res = await axios.get(DL_API, {
-    params: { url: pageUrl },
+  const res = await axios.get(INFO_API, {
+    params: { q: pageUrl, api_key: API_KEY },
     timeout: 120000,
     headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'application/json' },
     validateStatus: function () {
@@ -141,10 +126,10 @@ async function infoApi(pageUrl) {
     },
   });
   if (res.status !== 200 || !res.data) throw new Error('Info HTTP ' + res.status);
-  if (res.data.success === false) {
-    throw new Error(res.data.message || res.data.error || 'Info failed');
+  if (res.data.status === false) {
+    throw new Error(res.data.error || res.data.message || 'Info failed');
   }
-  return res.data.result || res.data.data || res.data;
+  return res.data.data || res.data.result || res.data;
 }
 
 async function sendDocument(sock, from, msg, opt, title) {
@@ -153,30 +138,42 @@ async function sendDocument(sock, from, msg, opt, title) {
     clean(title, 40).replace(/[\/\\:*?"<>|]/g, '').replace(/\s+/g, '_') ||
     'movie';
 
+  if (!opt.direct) {
+    return replyImg(
+      sock,
+      from,
+      msg,
+      '🔗 *Telegram / page link*\n' +
+        clean(opt.quality, 40) +
+        '\n' +
+        opt.url +
+        '\n\nOpen in browser / Telegram'
+    );
+  }
+
   await replyImg(
     sock,
     from,
     msg,
-    '⬆️💕 *Sending document...*\n🎥 ' + (opt.meta || opt.label || 'Video')
+    '⬆️💕 *Sending document...*\n🎥 ' + opt.quality + (opt.size ? ' · ' + opt.size : '')
   );
-
-  const caption =
-    '📁 *' +
-    clean(title, 50) +
-    '*\n🎥 ' +
-    (opt.meta || opt.label || '') +
-    '\n> ✦ ' +
-    footer +
-    ' ✦';
 
   try {
     await sock.sendMessage(
       from,
       {
-        document: { url: opt.resolvedUrl },
+        document: { url: opt.url },
         mimetype: 'video/mp4',
         fileName: safeName + '.mp4',
-        caption: caption,
+        caption:
+          '📁 *' +
+          clean(title, 50) +
+          '*\n🎥 ' +
+          opt.quality +
+          (opt.size ? ' · ' + opt.size : '') +
+          '\n> ✦ ' +
+          footer +
+          ' ✦',
       },
       { quoted: msg }
     );
@@ -186,116 +183,20 @@ async function sendDocument(sock, from, msg, opt, title) {
       sock,
       from,
       msg,
-      '⚠️ Document fail\n`' + err.message + '`\n\n🔗 ' + opt.resolvedUrl
+      '⚠️ Document fail\n`' + err.message + '`\n\n🔗 ' + opt.url
     );
   }
 }
 
-function showQualityList(item, title, downloads, from, prefix) {
-  let text =
-    '╭───「 💖🎬 *DOWNLOAD* 」───╮\n│\n' +
-    '│  👑 *' +
-    clean(title, 42) +
-    '*\n│\n' +
-    '│  📥 *Pick quality:*\n';
-  downloads.forEach(function (d, i) {
-    text += '│  *' + (i + 1) + '.* ' + clean(d.meta || d.label, 42) + '\n';
-  });
-  text +=
-    '\n│  👇 *' +
-    prefix +
-    'cinesubz2 <number>*\n' +
-    '│  📁 Document stream\n' +
-    '│  ✨ Footer › ' +
-    getFooter(from) +
-    '\n' +
-    '╰──────────────────────╯';
-  return text;
-}
-
-async function openMovieOrTv(sock, msg, from, item, prefix) {
+async function openDetails(sock, msg, from, item, prefix) {
   await replyImg(sock, from, msg, '🌸✨ *Loading details...*');
 
   const info = await infoApi(item.url);
-  const type = String(info.type || item.type || 'movie').toLowerCase();
-
-  // ----- TV SHOW: episode list -----
-  if (type.includes('tv') || Array.isArray(info.episodes)) {
-    const episodes = Array.isArray(info.episodes) ? info.episodes : [];
-    if (!episodes.length) {
-      return replyImg(sock, from, msg, '🥺 No episodes found');
-    }
-
-    setPending(from, {
-      type: 'episodes',
-      item: item,
-      info: info,
-      episodes: episodes,
-    });
-
-    const show = episodes.slice(0, 30);
-    let text =
-      '╭───「 💖📺 *TV SHOW* 」───╮\n│\n' +
-      '│  👑 *' +
-      clean(info.title || item.title, 42) +
-      '*\n' +
-      '│  📦 Seasons › ' +
-      (info.totalSeasons || '?') +
-      '\n' +
-      '│  🎬 Episodes › ' +
-      (info.totalEpisodes || episodes.length) +
-      '\n│\n' +
-      '│  💕 *Pick episode:*\n';
-
-    show.forEach(function (ep, i) {
-      text +=
-        '│  *' +
-        (i + 1) +
-        '.* S' +
-        (ep.season || '?') +
-        'E' +
-        (ep.episode || i + 1) +
-        ' · ' +
-        clean(ep.episodeTitle || '', 24) +
-        '\n';
-    });
-    if (episodes.length > show.length) {
-      text += '│  … +' + (episodes.length - show.length) + ' more\n';
-    }
-    text +=
-      '\n│  👇 *' +
-      prefix +
-      'cinesubz2 <number>*\n' +
-      '╰──────────────────────╯';
-
-    const poster = item.img;
-    if (poster && /^https?:\/\//i.test(poster)) {
-      try {
-        await sock.sendMessage(
-          from,
-          { image: { url: poster }, caption: text + foot(from) },
-          { quoted: msg }
-        );
-        return;
-      } catch (_) {}
-    }
-    return replyImg(sock, from, msg, text);
-  }
-
-  // ----- MOVIE: quality list -----
-  let downloads = extractDownloads(info);
-  if (!downloads.length && info.result) {
-    downloads = extractDownloads(info.result);
-  }
+  const downloads = extractDownloads(info);
+  const title = info.title || item.title;
 
   if (!downloads.length) {
-    console.error('[cinesubz2] no downloads keys=', Object.keys(info || {}));
-    return replyImg(
-      sock,
-      from,
-      msg,
-      '🥺 No direct download links\nAPI returned empty downloads for this title'
-    );
+    return replyImg(sock, from, msg, '🥺 No download links from API');
   }
 
   setPending(from, {
@@ -303,70 +204,65 @@ async function openMovieOrTv(sock, msg, from, item, prefix) {
     item: item,
     info: info,
     downloads: downloads,
-    title: info.title || item.title,
+    title: title,
   });
 
-  const detail =
-    '╭───「 💖🎬 *MOVIE* 」───╮\n│\n' +
-    '│  👑 *' +
-    clean(info.title || item.title, 42) +
-    '*\n' +
-    '│  ⭐ IMDb › ' +
-    (item.imdb || 'N/A') +
-    '\n' +
-    '│  📅 Year › ' +
-    (item.date || 'N/A') +
-    '\n' +
-    '│  ⏱️ ' +
-    clean(item.runtime || 'N/A', 20) +
-    '\n' +
-    '│  🎥 ' +
-    (info.quality || item.quality || 'N/A') +
-    '\n' +
-    '│  🏷️ ' +
-    clean(item.genres || 'N/A', 40) +
-    '\n│\n' +
-    showQualityList(item, info.title || item.title, downloads, from, prefix).replace(
-      /^╭───「 💖🎬 \*DOWNLOAD\* 」───╮\n│\n│  👑 \*[^\n]*\*\n│\n/,
-      ''
-    );
+  const genres = Array.isArray(info.genres)
+    ? info.genres.join(', ')
+    : info.genres || '';
 
-  // simpler combined caption
   let text =
-    '╭───「 💖🎬 *MOVIE* 」───╮\n│\n' +
+    '╭───「 💖🎬 *CINESUBZ 2* 」───╮\n│\n' +
     '│  👑 *' +
-    clean(info.title || item.title, 42) +
+    clean(title, 42) +
     '*\n' +
     '│  ⭐ IMDb › ' +
-    (item.imdb || 'N/A') +
+    (info.imdb || info.rating || item.rating || 'N/A') +
     '\n' +
     '│  📅 Year › ' +
-    (item.date || 'N/A') +
+    (info.year || 'N/A') +
     '\n' +
-    '│  ⏱️ Runtime › ' +
-    clean(item.runtime || 'N/A', 20) +
+    '│  ⏱️ Duration › ' +
+    (info.duration || 'N/A') +
     '\n' +
     '│  🎥 Quality › ' +
     (info.quality || item.quality || 'N/A') +
     '\n' +
-    '│  🏷️ Genres › ' +
-    clean(item.genres || 'N/A', 40) +
-    '\n│\n' +
-    '│  📥 *Pick quality:*\n';
+    '│  🗣️ Lang › ' +
+    (info.language || 'N/A') +
+    '\n' +
+    '│  🏷️ ' +
+    clean(genres, 40) +
+    '\n';
+
+  if (info.story) {
+    text += '│\n│  📝 ' + clean(info.story, 120) + '\n';
+  }
+
+  text += '│\n│  📥 *Downloads:*\n';
   downloads.forEach(function (d, i) {
-    text += '│  *' + (i + 1) + '.* ' + clean(d.meta || d.label, 42) + '\n';
+    text +=
+      '│  *' +
+      (i + 1) +
+      '.* ' +
+      clean(d.quality, 36) +
+      (d.size ? ' · ' + d.size : '') +
+      (d.direct ? ' ✅' : ' 🔗') +
+      '\n';
   });
+
   text +=
-    '\n│  👇 *' +
+    '\n│  ✅ = WhatsApp document\n' +
+    '│  🔗 = Telegram / page link\n' +
+    '│  👇 *' +
     prefix +
     'cinesubz2 <number>*\n' +
-    '│  📁 Document stream\n' +
     '│  ✨ Footer › ' +
     getFooter(from) +
     '\n' +
     '╰──────────────────────╯';
 
-  const poster = item.img;
+  const poster = info.image || item.img;
   if (poster && /^https?:\/\//i.test(poster)) {
     try {
       await sock.sendMessage(
@@ -383,7 +279,7 @@ async function openMovieOrTv(sock, msg, from, item, prefix) {
 module.exports = {
   name: 'cinesubz2',
   aliases: ['cs2', 'cine2'],
-  description: 'CineSubz v2 search & document download',
+  description: 'CineSubz v2 (Chamindu API) + custom footer',
   category: 'download',
 
   async execute(ctx) {
@@ -397,65 +293,19 @@ module.exports = {
     if (args.length === 1 && /^\d+$/.test(args[0])) {
       const n = parseInt(args[0], 10);
 
-      // search → open movie/tv
       if (state && state.type === 'search') {
         const item = state.results[n - 1];
         if (!item) {
           return replyImg(sock, from, msg, '❌ *1*–*' + state.results.length + '*');
         }
         try {
-          return await openMovieOrTv(sock, msg, from, item, prefix);
+          return await openDetails(sock, msg, from, item, prefix);
         } catch (err) {
-          console.error('[cinesubz2] open', err.message);
+          console.error('[cinesubz2] info', err.message);
           return replyImg(sock, from, msg, '❌ `' + err.message + '`');
         }
       }
 
-      // episodes → quality
-      if (state && state.type === 'episodes') {
-        const ep = state.episodes[n - 1];
-        if (!ep) {
-          return replyImg(
-            sock,
-            from,
-            msg,
-            '❌ *1*–*' + Math.min(30, state.episodes.length) + '*'
-          );
-        }
-        let downloads = extractDownloads(ep);
-        if (!downloads.length) {
-          return replyImg(
-            sock,
-            from,
-            msg,
-            '🥺 No direct links for this episode'
-          );
-        }
-        const title =
-          (state.info.title || state.item.title) +
-          ' S' +
-          (ep.season || '') +
-          'E' +
-          (ep.episode || n);
-
-        setPending(from, {
-          type: 'quality',
-          item: state.item,
-          info: state.info,
-          downloads: downloads,
-          title: title,
-          episodes: state.episodes,
-        });
-
-        return replyImg(
-          sock,
-          from,
-          msg,
-          showQualityList(state.item, title, downloads, from, prefix)
-        );
-      }
-
-      // quality → document
       if (state && state.type === 'quality') {
         const opt = state.downloads[n - 1];
         if (!opt) {
@@ -466,13 +316,7 @@ module.exports = {
             '❌ *1*–*' + state.downloads.length + '*'
           );
         }
-        return sendDocument(
-          sock,
-          from,
-          msg,
-          opt,
-          state.title || (state.info && state.info.title) || state.item.title
-        );
+        return sendDocument(sock, from, msg, opt, state.title);
       }
 
       return replyImg(
@@ -491,13 +335,14 @@ module.exports = {
         '╭───「 💖🎬 *CINESUBZ 2* 」───╮\n│\n' +
           '│  ' +
           prefix +
-          'cinesubz2 <movie/tv name>\n' +
+          'cinesubz2 <name>\n' +
           '│  ' +
           prefix +
           'cinesubz2 <number>\n' +
           '│  ' +
           prefix +
           'cinesubz2f <footer>\n│\n' +
+          '│  API › Chamindu CineSubz\n' +
           '│  ✨ Footer › ' +
           getFooter(from) +
           '\n' +
@@ -506,12 +351,7 @@ module.exports = {
     }
 
     const query = args.join(' ').trim();
-    await replyImg(
-      sock,
-      from,
-      msg,
-      '🔍💕 *Searching...*\n🔎 ' + clean(query, 40)
-    );
+    await replyImg(sock, from, msg, '🔍💕 *Searching...*\n🔎 ' + clean(query, 40));
 
     try {
       const results = await searchApi(query);
@@ -531,12 +371,12 @@ module.exports = {
       results.forEach(function (r) {
         list += '│  *' + r.index + '.* ' + clean(r.title, 38) + '\n';
         list +=
-          '│      ⭐' +
-          (r.imdb || '-') +
-          ' · ' +
-          (r.date || '') +
+          '│      ' +
+          (r.quality || '-') +
           ' · ' +
           (r.type || '') +
+          ' · ⭐' +
+          (r.rating || '-') +
           '\n';
       });
       list +=
