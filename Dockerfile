@@ -2,11 +2,12 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# Install system deps for sharp if needed
+# Install system deps for sharp and git-based npm dependencies
 RUN apt-get update && apt-get install -y \
     python3 \
     make \
     g++ \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
