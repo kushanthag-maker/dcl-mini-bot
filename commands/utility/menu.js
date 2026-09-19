@@ -53,16 +53,18 @@ function ramUsage() {
 }
 
 function buildCategoryBlocks(prefix) {
-  const all = getAllCommands();
+  const all = getAllCommands() || [];
   const byCat = {};
+  const pfx = String(prefix || '.');
 
   for (const cmd of all) {
-    let cat = (cmd.category || 'utility').toLowerCase();
+    if (!cmd || !cmd.name) continue;
+    let cat = String(cmd.category || 'utility').toLowerCase();
     if (!byCat[cat]) byCat[cat] = [];
     byCat[cat].push(cmd);
   }
 
-  const ordered = Object.keys(byCat).sort((a, b) => {
+  const ordered = Object.keys(byCat).sort(function (a, b) {
     const oa = (CATEGORY_META[a] && CATEGORY_META[a].order) || 99;
     const ob = (CATEGORY_META[b] && CATEGORY_META[b].order) || 99;
     if (oa !== ob) return oa - ob;
@@ -70,18 +72,24 @@ function buildCategoryBlocks(prefix) {
   });
 
   let out = '';
-  for (const cat of ordered) {
+  for (let i = 0; i < ordered.length; i++) {
+    const cat = ordered[i];
     const meta = CATEGORY_META[cat] || {
       title: cat.toUpperCase(),
       emoji: '🌹',
     };
-    const cmds = byCat[cat].sort((a, b) => a.name.localeCompare(b.name));
+    const cmds = byCat[cat].slice().sort(function (a, b) {
+      return String(a.name).localeCompare(String(b.name));
+    });
 
-    out += `\n*╭──┉❰ ${meta.emoji} ${meta.title} ❱┉──•*\n`;
-    for (const cmd of cmds) {
-      out += `*│◊│* 🌸 \`\( {prefix} \){cmd.name}\`\n`;
+    out += '\n*╭──┉❰ ' + meta.emoji + ' ' + meta.title + ' ❱┉──•*\n';
+    for (let j = 0; j < cmds.length; j++) {
+      const name = String(cmds[j].name || '').trim();
+      if (!name) continue;
+      // real command: .song  (NOT {prefix}{cmd.name})
+      out += '*│◊│* ✦ `' + pfx + name + '`\n';
     }
-    out += `*│◊╰────────────┉•┉*\n*╰──────────────────┉*\n`;
+    out += '*│◊╰────────────┉•┉*\n*╰──────────────────┉*\n';
   }
   return out;
 }
@@ -135,7 +143,7 @@ module.exports = {
         }
       }
 
-      // 2) Logo
+      // 2) Logo image (new rose / girl banner)
       const shortCaption = `
 *╭─┉❰ 💖 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 𝐐𝐔𝐄𝐄𝐍 💖 ❱┉─┉──•*
 *│ 🌹 𝐇𝐄𝐋𝐋𝐎 : @${user}*
@@ -170,7 +178,7 @@ module.exports = {
         } catch (_) {}
       }
 
-      // 3) Full menu — emoji only design
+      // 3) Full menu text — rose / girl style
       const menuText = `
 *╭─┉❰ 🌸 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 𝐔𝐒𝐄𝐑 🌸 ❱┉─┉──•*
 *│ 🌺 𝐇𝐄𝐋𝐋𝐎 : @${user}*
@@ -197,7 +205,7 @@ module.exports = {
 ${buildCategoryBlocks(prefix)}
 *╭━━〔 💬 𝐍𝐎𝐓𝐈𝐂𝐄 〕━━⬣*
 *│◊│* 📌 Type a command with *${prefix}*
-*│◊│* 🌸 Example: *\( {prefix}song* * \){prefix}tt* *${prefix}gpt*
+*│◊│* 🌸 Example: *${prefix}song* *${prefix}tt* *${prefix}gpt*
 *│◊│* 💕 Have a soft pretty day queen
 *╰━━━━━━━━━━━━━━⬣*
 
