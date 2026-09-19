@@ -36,15 +36,15 @@ function formatUptime(sec) {
   const d = Math.floor(sec / 86400);
   const h = Math.floor((sec % 86400) / 3600);
   const m = Math.floor((sec % 3600) / 60);
-  return `${d}D ${h}H ${m}M`;
+  return d + 'D ' + h + 'H ' + m + 'M';
 }
 
 function greeting() {
   const h = moment().tz(config.timezone || 'Asia/Colombo').hour();
-  if (h >= 5 && h < 12) return '🌞 𝐆𝐎𝐎𝐃 𝐌𝐎𝐑𝐍𝐈𝐍𝐆';
-  if (h >= 12 && h < 17) return '🌤️ 𝐆𝐎𝐎𝐃 𝐀𝐅𝐓𝐄𝐑𝐍𝐎𝐎𝐍';
-  if (h >= 17 && h < 21) return '🌆 𝐆𝐎𝐎𝐃 𝐄𝐕𝐄𝐍𝐈𝐍𝐆';
-  return '🌙 𝐆𝐎𝐎𝐃 𝐍𝐈𝐆𝐇𝐓';
+  if (h >= 5 && h < 12) return '🌞 Good Morning';
+  if (h >= 12 && h < 17) return '🌤️ Good Afternoon';
+  if (h >= 17 && h < 21) return '🌆 Good Evening';
+  return '🌙 Good Night';
 }
 
 function ramUsage() {
@@ -59,7 +59,7 @@ function buildCategoryBlocks(prefix) {
 
   for (const cmd of all) {
     if (!cmd || !cmd.name) continue;
-    let cat = String(cmd.category || 'utility').toLowerCase();
+    const cat = String(cmd.category || 'utility').toLowerCase();
     if (!byCat[cat]) byCat[cat] = [];
     byCat[cat].push(cmd);
   }
@@ -86,7 +86,6 @@ function buildCategoryBlocks(prefix) {
     for (let j = 0; j < cmds.length; j++) {
       const name = String(cmds[j].name || '').trim();
       if (!name) continue;
-      // real command: .song  (NOT {prefix}{cmd.name})
       out += '*│◊│* ✦ `' + pfx + name + '`\n';
     }
     out += '*│◊╰────────────┉•┉*\n*╰──────────────────┉*\n';
@@ -104,18 +103,17 @@ module.exports = {
     try {
       const prefix = config.prefix || '.';
       const sid = sessionId || null;
-      const settings = getSettings(sid);
       const showName = DISPLAY_BOT_NAME;
       const runtime = formatUptime(process.uptime());
       const userJid = msg.key.participant || msg.key.remoteJid || '';
       const user = String(userJid).split('@')[0].split(':')[0];
-      const totalCmds = getAllCommands().length;
+      const totalCmds = (getAllCommands() || []).length;
       const logo = getMenuLogo(sid);
       const greet = greeting();
       const ram = ramUsage();
       const mentions = userJid ? [userJid] : [];
 
-      // 1) Video note
+      // 1) Video note only (optional intro)
       try {
         await sock.sendMessage(
           from,
@@ -127,7 +125,6 @@ module.exports = {
           { quoted: msg }
         );
       } catch (e1) {
-        console.error('Menu video note fail:', e1.message);
         try {
           await sock.sendMessage(
             from,
@@ -143,82 +140,107 @@ module.exports = {
         }
       }
 
-      // 2) Logo image (new rose / girl banner)
-      const shortCaption = `
-*╭─┉❰ 💖 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 𝐐𝐔𝐄𝐄𝐍 💖 ❱┉─┉──•*
-*│ 🌹 𝐇𝐄𝐋𝐋𝐎 : @${user}*
-*│ ✨ ${greet}*
-*╰┉────────────┉─•*
+      // 2) ONE message: logo image + FULL menu as caption when short,
+      //    otherwise logo small + single full text (no mid "welcome" split card)
+      const menuBody =
+        '*╭─┉❰ 💖 ʜɪɪ ϙᴜᴇᴇɴ 💖 ❱┉─┉──•*\n' +
+        '*│ 🌹 ʜᴇʟʟᴏ : @' +
+        user +
+        '*\n' +
+        '*╰┉────────────┉─•*\n\n' +
+        '*❰🌟 ' +
+        greet +
+        ' ❱*\n\n' +
+        '*🌸🌹💖🌺🌸🌹💖🌺🌸*\n' +
+        '*💗  ✨  ᴄᴜᴛᴇ ᴍᴇɴᴜ  ✨  💗*\n' +
+        '*🌺💖🌹🌸🌺💖🌹🌸🌺*\n' +
+        '*🎀  💕  ǫᴜᴇᴇɴ ᴠɪʙᴇs  💕  🎀*\n' +
+        '*🌸🌹💖🌺🌸🌹💖🌺🌸*\n\n' +
+        '*╭──┉❰ 👑 ꜱʏꜱᴛᴇᴍ ɪɴꜰᴏ ❱┉──•*\n' +
+        '*│◊│* ✦ 🤖 `ʙᴏᴛ` : ' +
+        showName +
+        '\n' +
+        '*│◊│* ✦ 👑 `ᴏᴡɴᴇʀ` : ' +
+        FOOTER_DEV +
+        '\n' +
+        '*│◊│* ✦ 💾 `ʀᴀᴍ` : ' +
+        ram +
+        '\n' +
+        '*│◊│* ✦ ⏱️ `ᴜᴘᴛɪᴍᴇ` : ' +
+        runtime +
+        '\n' +
+        '*│◊│* ✦ 📦 `ᴄᴍᴅꜱ` : ' +
+        totalCmds +
+        '\n' +
+        '*│◊│* ✦ ⚙️ `ᴘʀᴇғɪx` : ' +
+        prefix +
+        '\n' +
+        '*│◊│* ✦ 💗 `ꜱᴛʏʟᴇ` : ɢɪʀʟ ʀᴏꜱᴇ\n' +
+        '*│◊╰────────────┉•┉*\n' +
+        '*╰──────────────────┉*\n' +
+        buildCategoryBlocks(prefix) +
+        '*╭━━〔 💬 ɴᴏᴛɪᴄᴇ 〕━━⬣*\n' +
+        '*│◊│* 📌 Type a command with *' +
+        prefix +
+        '*\n' +
+        '*│◊│* 🌸 Example: *' +
+        prefix +
+        'song* *' +
+        prefix +
+        'tt* *' +
+        prefix +
+        'gpt*\n' +
+        '*│◊│* 💕 Have a soft pretty day queen\n' +
+        '*╰━━━━━━━━━━━━━━⬣*\n\n' +
+        '_*🌟 ʜᴀᴠᴇ ᴀ ɴɪᴄᴇ ᴅᴀʏ 🌺*_\n' +
+        '_*✰┈ ' +
+        showName +
+        ' ┈✰*_\n\n' +
+        '> ' +
+        FOOTER_DEV +
+        '\n> 🌹 ᴅᴀʀᴋ ǫᴜᴇᴇɴ ᴏꜰᴄ 🌹';
 
-*🌸 ${showName} 🌸*
-*💕 Your pretty menu is ready*`.trim();
+      // Prefer single image+caption if fits (~1024), else single text only (no 2nd split card)
+      if (menuBody.length <= 1000) {
+        try {
+          await sock.sendMessage(
+            from,
+            {
+              image: { url: logo },
+              caption: menuBody,
+              mentions: mentions,
+            },
+            { quoted: msg }
+          );
+          return;
+        } catch (e) {
+          console.error('Menu image+caption fail:', e.message);
+        }
+      }
 
+      // Long menu: one image (tiny caption) is skipped — ONLY one full text message
+      // so it does not look like "menu split in two"
       try {
         await sock.sendMessage(
           from,
           {
             image: { url: logo },
-            caption: shortCaption,
-            mentions,
+            caption:
+              '*💖 ' +
+              showName +
+              '*\n*🌹 @' +
+              user +
+              '* · ' +
+              greet,
+            mentions: mentions,
           },
           { quoted: msg }
         );
-      } catch (logoErr) {
-        console.error('Menu logo fail:', logoErr.message);
-        try {
-          await sock.sendMessage(
-            from,
-            {
-              image: { url: DEFAULT_LOGO },
-              caption: shortCaption,
-              mentions,
-            },
-            { quoted: msg }
-          );
-        } catch (_) {}
-      }
-
-      // 3) Full menu text — rose / girl style
-      const menuText = `
-*╭─┉❰ 🌸 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 𝐔𝐒𝐄𝐑 🌸 ❱┉─┉──•*
-*│ 🌺 𝐇𝐄𝐋𝐋𝐎 : @${user}*
-*╰┉────────────┉─•*
-
-*❰🌟 𝐆𝐑𝐄𝐄𝐓𝐈𝐍𝐆 : ${greet} ❱*
-
-*🌸🌹💖🌺🌸🌹💖🌺🌸*
-*💗  ✨  𝐂𝐔𝐓𝐄 𝐌𝐄𝐍𝐔  ✨  💗*
-*🌺💖🌹🌸🌺💖🌹🌸🌺*
-*🎀  💕  𝐐𝐔𝐄𝐄𝐍 𝐕𝐈𝐁𝐄𝐒  💕  🎀*
-*🌸🌹💖🌺🌸🌹💖🌺🌸*
-
-*╭──┉❰ 👑 𝐒𝐘𝐒𝐓𝐄𝐌 𝐈𝐍𝐅𝐎 ❱┉──•*
-*│◊│* ✦ 🤖 \`ʙᴏᴛ\` : ${showName}
-*│◊│* ✦ 👑 \`ᴏᴡɴᴇʀ\` : ${FOOTER_DEV}
-*│◊│* ✦ 💾 \`ʀᴀᴍ\` : ${ram}
-*│◊│* ✦ ⏱️ \`ᴜᴘᴛɪᴍᴇ\` : ${runtime}
-*│◊│* ✦ 📦 \`ᴄᴍᴅꜱ\` : ${totalCmds}
-*│◊│* ✦ ⚙️ \`ᴘʀᴇғɪx\` : ${prefix}
-*│◊│* ✦ 💗 \`ꜱᴛʏʟᴇ\` : 𝐆ɪʀʟ 𝐑ᴏ𝐬ᴇ
-*│◊╰────────────┉•┉*
-*╰──────────────────┉*
-${buildCategoryBlocks(prefix)}
-*╭━━〔 💬 𝐍𝐎𝐓𝐈𝐂𝐄 〕━━⬣*
-*│◊│* 📌 Type a command with *${prefix}*
-*│◊│* 🌸 Example: *${prefix}song* *${prefix}tt* *${prefix}gpt*
-*│◊│* 💕 Have a soft pretty day queen
-*╰━━━━━━━━━━━━━━⬣*
-
-_*🌟 𝐇𝐀𝐕𝐄 𝐀 𝐍𝐈𝐂𝐄 𝐃𝐀𝐘 🌺*_
-_*✰┈ ${showName} ┈✰*_
-
-> ${FOOTER_DEV}
-> 🌹 𝐃𝐀𝐑𝐊 𝐐𝐔𝐄𝐄𝐍 𝐎𝐅𝐂 🌹
-`.trim();
+      } catch (_) {}
 
       await sock.sendMessage(
         from,
-        { text: menuText, mentions },
+        { text: menuBody, mentions: mentions },
         { quoted: msg }
       );
     } catch (err) {
