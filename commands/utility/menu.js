@@ -1,19 +1,19 @@
-const os = require('os');
 const config = require('../../config');
 const { getSettings } = require('../../lib/botSettings');
 const moment = require('moment-timezone');
 const { getAllCommands } = require('../../lib/commandHandler');
 
 const MENU_VIDEO = 'https://files.catbox.moe/jz1qbc.mp4';
-const DEFAULT_LOGO = 'https://files.catbox.moe/bp9p86.png';
+const DEFAULT_LOGO = 'https://files.catbox.moe/yjyx4x.webp';
 const DISPLAY_BOT_NAME = '𝕯𝕬𝕽𝕶 𝕼𝖀𝕰𝕰𝕹 𝕸𝕴𝕹𝕴';
 const FOOTER_DEV = 'RED DEVIL AND ZAYRA DEV';
 
 function getMenuLogo(sessionId) {
   try {
     const logo = getSettings(sessionId).logo || DEFAULT_LOGO;
-    // ignore legacy default logo
-    if (!logo || logo.includes('4dvou4.png')) return DEFAULT_LOGO;
+    if (!logo || logo.includes('4dvou4.png') || logo.includes('bp9p86.png')) {
+      return DEFAULT_LOGO;
+    }
     return logo;
   } catch {
     return DEFAULT_LOGO;
@@ -23,13 +23,13 @@ function getMenuLogo(sessionId) {
 const CATEGORY_META = {
   download: { title: '𝐃ᴏᴡɴʟᴏᴀᴅ', emoji: '💎', order: 1 },
   media: { title: '𝐌ᴇᴅɪᴀ', emoji: '🌸', order: 2 },
-  ai: { title: '𝐀ɪ', emoji: '🤖', order: 3 },
-  tools: { title: '𝐓ᴏᴏʟꜱ', emoji: '🛠️', order: 4 },
-  utility: { title: '𝐆ᴇɴᴇʀᴀʟ', emoji: '💖', order: 5 },
-  group: { title: '𝐆ʀᴏᴜᴘ', emoji: '🦋', order: 6 },
-  owner: { title: '𝐀ᴅᴍɪɴ', emoji: '👑', order: 7 },
-  fun: { title: '𝐅ᴜɴ', emoji: '🌟', order: 8 },
-  movie: { title: '𝐌ᴏᴠɪᴇ', emoji: '🌺', order: 9 },
+  movie: { title: '𝐌ᴏᴠɪᴇ', emoji: '🌺', order: 3 },
+  ai: { title: '𝐀ɪ', emoji: '💗', order: 4 },
+  tools: { title: '𝐓ᴏᴏʟꜱ', emoji: '✨', order: 5 },
+  utility: { title: '𝐆ᴇɴᴇʀᴀʟ', emoji: '💖', order: 6 },
+  group: { title: '𝐆ʀᴏᴜᴘ', emoji: '🦋', order: 7 },
+  owner: { title: '𝐀ᴅᴍɪɴ', emoji: '👑', order: 8 },
+  fun: { title: '𝐅ᴜɴ', emoji: '🎀', order: 9 },
 };
 
 function formatUptime(sec) {
@@ -41,10 +41,10 @@ function formatUptime(sec) {
 
 function greeting() {
   const h = moment().tz(config.timezone || 'Asia/Colombo').hour();
-  if (h >= 5 && h < 12) return '🌞 GOOD MORNING';
-  if (h >= 12 && h < 17) return '🌞 GOOD AFTERNOON';
-  if (h >= 17 && h < 21) return '🌆 GOOD EVENING';
-  return '🌙 GOOD NIGHT';
+  if (h >= 5 && h < 12) return '🌞 𝐆𝐎𝐎𝐃 𝐌𝐎𝐑𝐍𝐈𝐍𝐆';
+  if (h >= 12 && h < 17) return '🌤️ 𝐆𝐎𝐎𝐃 𝐀𝐅𝐓𝐄𝐑𝐍𝐎𝐎𝐍';
+  if (h >= 17 && h < 21) return '🌆 𝐆𝐎𝐎𝐃 𝐄𝐕𝐄𝐍𝐈𝐍𝐆';
+  return '🌙 𝐆𝐎𝐎𝐃 𝐍𝐈𝐆𝐇𝐓';
 }
 
 function ramUsage() {
@@ -58,7 +58,6 @@ function buildCategoryBlocks(prefix) {
 
   for (const cmd of all) {
     let cat = (cmd.category || 'utility').toLowerCase();
-    if (cat === 'tools') cat = 'tools';
     if (!byCat[cat]) byCat[cat] = [];
     byCat[cat].push(cmd);
   }
@@ -74,13 +73,13 @@ function buildCategoryBlocks(prefix) {
   for (const cat of ordered) {
     const meta = CATEGORY_META[cat] || {
       title: cat.toUpperCase(),
-      emoji: '📌',
+      emoji: '🌹',
     };
     const cmds = byCat[cat].sort((a, b) => a.name.localeCompare(b.name));
 
     out += `\n*╭──┉❰ ${meta.emoji} ${meta.title} ❱┉──•*\n`;
     for (const cmd of cmds) {
-      out += `*│◊│* ✦ \`${prefix}${cmd.name}\`\n`;
+      out += `*│◊│* 🌸 \`\( {prefix} \){cmd.name}\`\n`;
     }
     out += `*│◊╰────────────┉•┉*\n*╰──────────────────┉*\n`;
   }
@@ -90,7 +89,7 @@ function buildCategoryBlocks(prefix) {
 module.exports = {
   name: 'menu',
   aliases: ['help', 'list', 'm', 'commands'],
-  description: 'Show all available commands with banner',
+  description: 'Show all available commands — girl rose style',
   category: 'utility',
 
   async execute({ sock, msg, from, sessionId }) {
@@ -98,8 +97,6 @@ module.exports = {
       const prefix = config.prefix || '.';
       const sid = sessionId || null;
       const settings = getSettings(sid);
-      const botName =
-        settings.botName || config.botName || DISPLAY_BOT_NAME;
       const showName = DISPLAY_BOT_NAME;
       const runtime = formatUptime(process.uptime());
       const userJid = msg.key.participant || msg.key.remoteJid || '';
@@ -108,15 +105,16 @@ module.exports = {
       const logo = getMenuLogo(sid);
       const greet = greeting();
       const ram = ramUsage();
+      const mentions = userJid ? [userJid] : [];
 
-      // 1) Video note first (circular video if supported)
+      // 1) Video note
       try {
         await sock.sendMessage(
           from,
           {
             video: { url: MENU_VIDEO },
             mimetype: 'video/mp4',
-            ptv: true, // video note
+            ptv: true,
           },
           { quoted: msg }
         );
@@ -137,47 +135,15 @@ module.exports = {
         }
       }
 
-      // 2) Fancy menu caption + logo
-      const menuText = `
-*╭─┉❰ 🌸 𝐖𝙴𝙻𝙲𝙾𝙼𝙴 𝐔𝚂𝙴𝚁 🌸 ❱┉─┉──•*
-*│ 🌺 𝐇𝙴𝙻𝙻𝙾 : @${user}*
+      // 2) Logo
+      const shortCaption = `
+*╭─┉❰ 💖 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 𝐐𝐔𝐄𝐄𝐍 💖 ❱┉─┉──•*
+*│ 🌹 𝐇𝐄𝐋𝐋𝐎 : @${user}*
+*│ ✨ ${greet}*
 *╰┉────────────┉─•*
 
-*❰🌟 𝐆ʀᴇᴇᴛɪɴɢ : ${greet} ❱*
-
-┆  •    ┆    °  ┆  •°    ┆✦ ˟˞ˁ㋞˟˖˟ˣˣ🌸
-┆     ° ┆  +   ┆     ×🌟˖˟ˠ˟ͣͥͬ🌺
-┆  •ʹ  °┆      💖 ◊ʅ⃛⃰˃˪෴˥
-┆        🌺°•°✦┋
-🌸.°•°°🌟┇
-_*🌟✦•°🌸↝❰💖✦•°🌺↝🤭*_
-
-*╭──┉❰ 👑 𝐒𝐘𝐒𝐓𝐄𝐌 𝐈𝐍𝐅𝐎 ❱┉──•*
-*│◊│* ✦ 🤖 \`ʙᴏᴛ\` : ${showName}
-*│◊│* ✦ 👑 \`ᴏᴡɴᴇʀ\` : ${FOOTER_DEV}
-*│◊│* ✦ 💾 \`ʀᴀᴍ\` : ${ram}
-*│◊│* ✦ ⏱️ \`ᴜᴘᴛɪᴍᴇ\` : ${runtime}
-*│◊│* ✦ 📦 \`ᴄᴍᴅꜱ\` : ${totalCmds}
-*│◊│* ✦ ⚙️ \`ᴘʀᴇғɪx\` : ${prefix}
-*│◊╰────────────┉•┉*
-*╰──────────────────┉*
-${buildCategoryBlocks(prefix)}
-*╭━━〔 💬 𝐍𝐎𝐓𝐈𝐂𝐄 〕━━⬣*
-*│◊│* 📌 Type a command with prefix *${prefix}*
-*│◊│* 🌸 Example: *${prefix}song* *${prefix}tt* *${prefix}gpt*
-*╰━━━━━━━━━━━━━━⬣*
-
-_*🌟 𝐇𝐀𝐕𝐄 𝐀 𝐍𝐈𝐂𝐄 𝐃𝐀𝐘 🌺*_
-_*✰┈ ${showName} ┈✰*_
-
-> ${FOOTER_DEV}
-`.trim();
-
-      // Always show logo, then full menu as ONE text (caption limit ~1024)
-      const mentions = userJid ? [userJid] : [];
-      const shortCaption = `*🌸 ${showName}*
-*🌺 𝐇𝙴𝙻𝙻𝙾 : @${user}*
-*❰🌟 ${greet} ❱*`;
+*🌸 ${showName} 🌸*
+*💕 Your pretty menu is ready*`.trim();
 
       try {
         await sock.sendMessage(
@@ -191,9 +157,57 @@ _*✰┈ ${showName} ┈✰*_
         );
       } catch (logoErr) {
         console.error('Menu logo fail:', logoErr.message);
+        try {
+          await sock.sendMessage(
+            from,
+            {
+              image: { url: DEFAULT_LOGO },
+              caption: shortCaption,
+              mentions,
+            },
+            { quoted: msg }
+          );
+        } catch (_) {}
       }
 
-      // Full menu UI — single text message (not split)
+      // 3) Full menu — emoji only design
+      const menuText = `
+*╭─┉❰ 🌸 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 𝐔𝐒𝐄𝐑 🌸 ❱┉─┉──•*
+*│ 🌺 𝐇𝐄𝐋𝐋𝐎 : @${user}*
+*╰┉────────────┉─•*
+
+*❰🌟 𝐆𝐑𝐄𝐄𝐓𝐈𝐍𝐆 : ${greet} ❱*
+
+*🌸🌹💖🌺🌸🌹💖🌺🌸*
+*💗  ✨  𝐂𝐔𝐓𝐄 𝐌𝐄𝐍𝐔  ✨  💗*
+*🌺💖🌹🌸🌺💖🌹🌸🌺*
+*🎀  💕  𝐐𝐔𝐄𝐄𝐍 𝐕𝐈𝐁𝐄𝐒  💕  🎀*
+*🌸🌹💖🌺🌸🌹💖🌺🌸*
+
+*╭──┉❰ 👑 𝐒𝐘𝐒𝐓𝐄𝐌 𝐈𝐍𝐅𝐎 ❱┉──•*
+*│◊│* ✦ 🤖 \`ʙᴏᴛ\` : ${showName}
+*│◊│* ✦ 👑 \`ᴏᴡɴᴇʀ\` : ${FOOTER_DEV}
+*│◊│* ✦ 💾 \`ʀᴀᴍ\` : ${ram}
+*│◊│* ✦ ⏱️ \`ᴜᴘᴛɪᴍᴇ\` : ${runtime}
+*│◊│* ✦ 📦 \`ᴄᴍᴅꜱ\` : ${totalCmds}
+*│◊│* ✦ ⚙️ \`ᴘʀᴇғɪx\` : ${prefix}
+*│◊│* ✦ 💗 \`ꜱᴛʏʟᴇ\` : 𝐆ɪʀʟ 𝐑ᴏ𝐬ᴇ
+*│◊╰────────────┉•┉*
+*╰──────────────────┉*
+${buildCategoryBlocks(prefix)}
+*╭━━〔 💬 𝐍𝐎𝐓𝐈𝐂𝐄 〕━━⬣*
+*│◊│* 📌 Type a command with *${prefix}*
+*│◊│* 🌸 Example: *\( {prefix}song* * \){prefix}tt* *${prefix}gpt*
+*│◊│* 💕 Have a soft pretty day queen
+*╰━━━━━━━━━━━━━━⬣*
+
+_*🌟 𝐇𝐀𝐕𝐄 𝐀 𝐍𝐈𝐂𝐄 𝐃𝐀𝐘 🌺*_
+_*✰┈ ${showName} ┈✰*_
+
+> ${FOOTER_DEV}
+> 🌹 𝐃𝐀𝐑𝐊 𝐐𝐔𝐄𝐄𝐍 𝐎𝐅𝐂 🌹
+`.trim();
+
       await sock.sendMessage(
         from,
         { text: menuText, mentions },
@@ -204,7 +218,7 @@ _*✰┈ ${showName} ┈✰*_
       try {
         await sock.sendMessage(
           from,
-          { text: '❌ Menu load වෙන්නේ නැහැ. ටිකකින් නැවත try කරන්න.' },
+          { text: '❌ Menu load වෙන්නේ නැහැ. ටිකකින් නැවත try කරන්න. 💕' },
           { quoted: msg }
         );
       } catch (_) {}
