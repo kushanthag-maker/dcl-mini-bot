@@ -85,11 +85,7 @@
       flex-direction: column;
       align-items: center;
     }
-    .brand {
-      text-align: center;
-      margin-bottom: 22px;
-      animation: floatIn 1s ease-out both;
-    }
+    .brand { text-align: center; margin-bottom: 22px; animation: floatIn 1s ease-out both; }
     @keyframes floatIn {
       from { opacity: 0; transform: translateY(-24px); }
       to { opacity: 1; transform: translateY(0); }
@@ -117,16 +113,8 @@
       animation: shine 5s linear infinite;
       margin-top: 4px;
     }
-    @keyframes shine {
-      to { background-position: 200% center; }
-    }
-    .tagline {
-      font-size: 0.92rem;
-      color: var(--pink);
-      opacity: 0.9;
-      margin-top: 6px;
-      font-weight: 500;
-    }
+    @keyframes shine { to { background-position: 200% center; } }
+    .tagline { font-size: 0.92rem; color: var(--pink); opacity: 0.9; margin-top: 6px; font-weight: 500; }
     .v2-badge {
       display: inline-flex;
       align-items: center;
@@ -159,20 +147,8 @@
         inset 0 1px 0 rgba(255, 255, 255, 0.06);
       animation: floatIn 1s 0.15s ease-out both;
     }
-    .card-title {
-      font-family: 'Cormorant Garamond', serif;
-      font-size: 1.4rem;
-      text-align: center;
-      color: #fff;
-      margin-bottom: 6px;
-    }
-    .card-sub {
-      text-align: center;
-      font-size: 0.82rem;
-      color: var(--pink);
-      margin-bottom: 20px;
-      opacity: 0.9;
-    }
+    .card-title { font-family: 'Cormorant Garamond', serif; font-size: 1.4rem; text-align: center; color: #fff; margin-bottom: 6px; }
+    .card-sub { text-align: center; font-size: 0.82rem; color: var(--pink); margin-bottom: 20px; opacity: 0.9; }
     .field { margin-bottom: 14px; }
     .field label {
       display: block;
@@ -196,10 +172,7 @@
       transition: border-color 0.25s, box-shadow 0.25s;
     }
     .field input::placeholder { color: rgba(255, 179, 193, 0.4); }
-    .field input:focus {
-      border-color: var(--rose);
-      box-shadow: 0 0 0 3px rgba(255, 77, 109, 0.2);
-    }
+    .field input:focus { border-color: var(--rose); box-shadow: 0 0 0 3px rgba(255, 77, 109, 0.2); }
     .btn {
       width: 100%;
       margin-top: 8px;
@@ -217,18 +190,13 @@
       animation: btnGrad 4s ease infinite;
       box-shadow: 0 8px 28px rgba(255, 77, 109, 0.4);
       transition: transform 0.2s, box-shadow 0.2s;
-      position: relative;
-      overflow: hidden;
     }
     @keyframes btnGrad {
       0% { background-position: 0% 50%; }
       50% { background-position: 100% 50%; }
       100% { background-position: 0% 50%; }
     }
-    .btn:hover {
-      transform: translateY(-2px) scale(1.02);
-      box-shadow: 0 12px 36px rgba(255, 77, 109, 0.55);
-    }
+    .btn:hover { transform: translateY(-2px) scale(1.02); box-shadow: 0 12px 36px rgba(255, 77, 109, 0.55); }
     .btn:active { transform: scale(0.98); }
     .btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
     .btn-ghost {
@@ -239,16 +207,8 @@
       margin-top: 10px;
       color: var(--pink);
     }
-    .btn-ghost:hover {
-      background: rgba(255, 77, 109, 0.12);
-      box-shadow: none;
-    }
-    .code-box {
-      display: none;
-      margin-top: 18px;
-      text-align: center;
-      animation: floatIn 0.5s ease-out both;
-    }
+    .btn-ghost:hover { background: rgba(255, 77, 109, 0.12); box-shadow: none; }
+    .code-box { display: none; margin-top: 18px; text-align: center; animation: floatIn 0.5s ease-out both; }
     .code-box.show { display: block; }
     .code-value {
       font-family: 'Cormorant Garamond', serif;
@@ -261,13 +221,9 @@
       border-radius: 16px;
       background: rgba(0,0,0,0.35);
       border: 1px solid rgba(255, 143, 163, 0.4);
+      cursor: pointer;
     }
-    .qr-box {
-      display: none;
-      margin-top: 18px;
-      text-align: center;
-      animation: floatIn 0.6s ease-out both;
-    }
+    .qr-box { display: none; margin-top: 18px; text-align: center; animation: floatIn 0.6s ease-out both; }
     .qr-box.show { display: block; }
     .qr-frame {
       display: inline-block;
@@ -281,41 +237,14 @@
       0%, 100% { box-shadow: 0 0 0 3px var(--rose-soft), 0 0 20px var(--glow); }
       50% { box-shadow: 0 0 0 5px var(--rose), 0 0 40px var(--glow); }
     }
-    .qr-frame img {
-      display: block;
-      width: 220px;
-      height: 220px;
-      border-radius: 8px;
-    }
-    .qr-hint {
-      margin-top: 12px;
-      font-size: 0.8rem;
-      color: var(--pink);
-      line-height: 1.45;
-    }
-    .status {
-      margin-top: 14px;
-      text-align: center;
-      font-size: 0.85rem;
-      min-height: 1.4em;
-      color: var(--pink);
-    }
+    .qr-frame img { display: block; width: 220px; height: 220px; border-radius: 8px; }
+    .qr-hint { margin-top: 12px; font-size: 0.8rem; color: var(--pink); line-height: 1.45; }
+    .status { margin-top: 14px; text-align: center; font-size: 0.85rem; min-height: 1.4em; color: var(--pink); }
     .status.ok { color: #4ade80; }
     .status.err { color: #fb7185; }
     .status.loading { color: var(--gold); }
-    .steps {
-      margin-top: 24px;
-      width: 100%;
-      padding: 0 4px;
-    }
-    .step {
-      display: flex;
-      gap: 12px;
-      align-items: flex-start;
-      margin-bottom: 12px;
-      opacity: 0;
-      animation: floatIn 0.7s ease-out forwards;
-    }
+    .steps { margin-top: 24px; width: 100%; padding: 0 4px; }
+    .step { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 12px; opacity: 0; animation: floatIn 0.7s ease-out forwards; }
     .step:nth-child(1) { animation-delay: 0.35s; }
     .step:nth-child(2) { animation-delay: 0.5s; }
     .step:nth-child(3) { animation-delay: 0.65s; }
@@ -333,31 +262,10 @@
       color: #fff;
       box-shadow: 0 4px 12px rgba(255, 77, 109, 0.35);
     }
-    .step p {
-      font-size: 0.82rem;
-      line-height: 1.4;
-      color: var(--blush);
-      opacity: 0.92;
-      padding-top: 4px;
-    }
-    footer {
-      margin-top: auto;
-      padding-top: 32px;
-      text-align: center;
-      font-size: 0.72rem;
-      color: rgba(255, 179, 193, 0.55);
-      letter-spacing: 0.04em;
-    }
+    .step p { font-size: 0.82rem; line-height: 1.4; color: var(--blush); opacity: 0.92; padding-top: 4px; }
+    footer { margin-top: auto; padding-top: 32px; text-align: center; font-size: 0.72rem; color: rgba(255, 179, 193, 0.55); letter-spacing: 0.04em; }
     footer strong { color: var(--rose-soft); font-weight: 600; }
-    .heart-float {
-      position: fixed;
-      bottom: -20px;
-      font-size: 1.2rem;
-      z-index: 1;
-      pointer-events: none;
-      animation: heartUp 7s linear forwards;
-      opacity: 0.7;
-    }
+    .heart-float { position: fixed; bottom: -20px; font-size: 1.2rem; z-index: 1; pointer-events: none; animation: heartUp 7s linear forwards; opacity: 0.7; }
     @keyframes heartUp {
       0% { transform: translateY(0) scale(0.6); opacity: 0; }
       15% { opacity: 0.75; }
@@ -396,8 +304,8 @@
       <div class="status" id="status"></div>
 
       <div class="code-box" id="codeBox">
-        <div class="code-value" id="codeValue">------</div>
-        <p class="qr-hint" style="margin-top:10px">Enter this code in WhatsApp → Linked Devices</p>
+        <div class="code-value" id="codeValue" title="Tap to copy">------</div>
+        <p class="qr-hint" style="margin-top:10px">Tap code to copy · Enter it in WhatsApp → Linked Devices</p>
       </div>
 
       <div class="qr-box" id="qrBox">
@@ -475,6 +383,8 @@
       var qrImg = document.getElementById('qrImg');
       var codeBox = document.getElementById('codeBox');
       var codeValue = document.getElementById('codeValue');
+      var activeSessionId = null;
+      var pollTimer = null;
 
       function setStatus(text, kind) {
         statusEl.textContent = text || '';
@@ -485,83 +395,113 @@
         return String(v || '').replace(/\D/g, '');
       }
 
+      function stopPolling() {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      }
+
+      // Poll until the bot comes online, then show success
+      function startStatusPolling(sessionId) {
+        stopPolling();
+        pollTimer = setInterval(async function () {
+          try {
+            var res = await fetch(API_BASE + '/api/session/' + encodeURIComponent(sessionId), { cache: 'no-store' });
+            if (!res.ok) return;
+            var st = await res.json();
+            if (st.status === 'online') {
+              stopPolling();
+              setStatus('🎉 Connected! Your bot is ONLINE 💖', 'ok');
+              spawnHeart(); spawnHeart(); spawnHeart();
+            } else if (st.status === 'error') {
+              stopPolling();
+              setStatus('Error: ' + (st.error || 'unknown'), 'err');
+            }
+          } catch (e) {}
+        }, 3000);
+      }
+
+      // Copy code on tap
+      codeValue.addEventListener('click', function () {
+        var code = codeValue.textContent.trim();
+        if (!code || code === '------') return;
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(code).then(function () {
+            setStatus('Code copied 📋 · paste it in WhatsApp', 'ok');
+          });
+        }
+      });
+
+      // ===== FIX: server expects POST /api/pair with JSON body { phone } =====
       document.getElementById('btnPair').addEventListener('click', async function () {
         var num = cleanPhone(phoneEl.value);
-        if (num.length < 10) {
-          setStatus('Please enter a valid number 💕', 'err');
+        if (num.length < 10 || num.length > 15) {
+          setStatus('Enter number with country code, no + (e.g. 9477XXXXXXX) 💕', 'err');
           return;
         }
-        setStatus('Requesting pairing code…', 'loading');
+        setStatus('Requesting pairing code… (up to 30s)', 'loading');
         this.disabled = true;
         qrBox.classList.remove('show');
         codeBox.classList.remove('show');
+        stopPolling();
         try {
-          var urls = [
-            API_BASE + '/api/pair?number=' + encodeURIComponent(num),
-            API_BASE + '/pair?number=' + encodeURIComponent(num),
-            API_BASE + '/api/pairing?number=' + encodeURIComponent(num)
-          ];
-          var data = null;
-          for (var i = 0; i < urls.length; i++) {
-            try {
-              var res = await fetch(urls[i], { method: 'GET' });
-              if (!res.ok) continue;
-              data = await res.json();
-              break;
-            } catch (e) {}
+          var res = await fetch(API_BASE + '/api/pair', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: num })
+          });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok || !data.code) {
+            throw new Error(data.error || ('Server returned ' + res.status));
           }
-          if (!data) throw new Error('Pair API not reachable');
-          var code = data.code || data.pairingCode || data.pair || (data.data && data.data.code);
-          if (code) {
-            codeValue.textContent = String(code);
-            codeBox.classList.add('show');
-            setStatus('Enter this code in WhatsApp 💖', 'ok');
-          } else if (data.qr || data.qrcode) {
-            qrImg.src = data.qr || data.qrcode;
-            qrBox.classList.add('show');
-            setStatus('QR ready — scan now 🌸', 'ok');
-          } else {
-            setStatus(JSON.stringify(data).slice(0, 120), 'err');
-          }
+          codeValue.textContent = String(data.code);
+          codeBox.classList.add('show');
+          activeSessionId = data.sessionId || null;
+          setStatus('Enter this code in WhatsApp 💖 waiting for you to confirm…', 'ok');
+          if (activeSessionId) startStatusPolling(activeSessionId);
         } catch (err) {
           setStatus('Pair failed: ' + err.message, 'err');
         }
         this.disabled = false;
       });
 
+      // ===== FIX: QR via POST /api/session/start then read /api/session/:id =====
       document.getElementById('btnQr').addEventListener('click', async function () {
-        setStatus('Loading QR…', 'loading');
+        setStatus('Loading QR… (up to 30s)', 'loading');
         this.disabled = true;
         codeBox.classList.remove('show');
+        stopPolling();
         try {
-          var urls = [API_BASE + '/api/qr', API_BASE + '/qr', API_BASE + '/api/pair/qr'];
-          var ok = false;
-          for (var i = 0; i < urls.length; i++) {
-            try {
-              var res = await fetch(urls[i], { cache: 'no-store' });
-              if (!res.ok) continue;
-              var ct = res.headers.get('content-type') || '';
-              if (ct.indexOf('image') !== -1) {
-                var blob = await res.blob();
-                qrImg.src = URL.createObjectURL(blob);
-                ok = true;
-                break;
+          var sessionId = activeSessionId || ('qr_' + Date.now().toString(36));
+          var res = await fetch(API_BASE + '/api/session/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId: sessionId })
+          });
+          var data = await res.json().catch(function () { return {}; });
+          if (!res.ok) throw new Error(data.error || ('Server returned ' + res.status));
+
+          // Poll for the QR data URL (socket needs a few seconds to connect)
+          var deadline = Date.now() + 30000;
+          var qr = null;
+          while (Date.now() < deadline) {
+            var r2 = await fetch(API_BASE + '/api/session/' + encodeURIComponent(sessionId), { cache: 'no-store' });
+            if (r2.ok) {
+              var st = await r2.json();
+              if (st.qr) { qr = st.qr; break; }
+              if (st.status === 'online') {
+                setStatus('This session is already paired ✅', 'ok');
+                this.disabled = false;
+                return;
               }
-              var data = await res.json();
-              var src = data.qr || data.qrcode || data.image || (data.data && data.data.qr);
-              if (src) {
-                qrImg.src = src;
-                ok = true;
-                break;
-              }
-            } catch (e) {}
+            }
+            await new Promise(function (r) { setTimeout(r, 1500); });
           }
-          if (ok) {
-            qrBox.classList.add('show');
-            setStatus('Scan with WhatsApp Linked Devices 🌹', 'ok');
-          } else {
-            setStatus('QR endpoint not found — use pairing code', 'err');
-          }
+          if (!qr) throw new Error('QR not ready yet — try again in a few seconds');
+
+          qrImg.src = qr;
+          qrBox.classList.add('show');
+          activeSessionId = sessionId;
+          setStatus('Scan with WhatsApp Linked Devices 🌹', 'ok');
+          startStatusPolling(sessionId);
         } catch (err) {
           setStatus(err.message, 'err');
         }
