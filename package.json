@@ -1,7 +1,7 @@
 {
   "name": "dcl-mini-bot",
-  "version": "1.0.0",
-  "description": "DCL MINI - Professional WhatsApp Multi-Device Bot with MongoDB Session Storage",
+  "version": "2.0.0",
+  "description": "DARK QUEEN V2 - Professional WhatsApp Multi-Device Bot with MongoDB Session Storage",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",
-    "@whiskeysockets/baileys": "6.7.18",
+    "@whiskeysockets/baileys": "npm:levvleys",
     "axios": "^1.7.9",
     "chalk": "^4.1.2",
     "dotenv": "^16.4.7",
