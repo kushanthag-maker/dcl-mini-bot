@@ -78,7 +78,15 @@ function routeInteractive(body) {
   if (body.startsWith('baiscope_')) {
     return { commandName: 'baiscope', args: [body] };
   }
-  // future: other_cmd_...
+  // DARK QUEEN V2 button routing
+  // dqset_* → settings command (toggle/refresh)
+  if (body.startsWith('dqset_')) {
+    return { commandName: 'settings', args: [body] };
+  }
+  // dqmenu_<cmd> → any command (menu quick buttons)
+  if (body.startsWith('dqmenu_')) {
+    return { commandName: body.slice(7), args: [body] };
+  }
   return null;
 }
 
