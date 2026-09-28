@@ -29,12 +29,32 @@ function extractInteractiveId(msg) {
   if (m.listResponseMessage?.singleSelectReply?.selectedRowId) {
     return m.listResponseMessage.singleSelectReply.selectedRowId;
   }
-  const nf = m.interactiveResponseMessage?.nativeFlowResponseMessage;
-  if (nf?.paramsJson) {
-    try {
-      const p = JSON.parse(nf.paramsJson);
-      return p.id || p.selectedRowId || p.button_id || p.rowId || null;
-    } catch (_) {}
+  // native flow / interactive response (list + quick reply)
+  const ir = m.interactiveResponseMessage;
+  if (ir) {
+    const nf = ir.nativeFlowResponseMessage || ir;
+    const raw = nf.paramsJson || nf.params_json || ir.paramsJson;
+    if (raw) {
+      try {
+        const p = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        // common shapes
+        if (p.id) return String(p.id);
+        if (p.selectedRowId) return String(p.selectedRowId);
+        if (p.rowId) return String(p.rowId);
+        if (p.button_id) return String(p.button_id);
+        if (p.selectedId) return String(p.selectedId);
+        // nested
+        if (p.params && p.params.id) return String(p.params.id);
+        if (p.response && p.response.id) return String(p.response.id);
+        // sometimes id is the only string value
+        for (const k of Object.keys(p)) {
+          const v = p[k];
+          if (typeof v === 'string' && (v.startsWith('dqcat_') || v.startsWith('dqmenu_') || v.startsWith('dqcmd_') || v.startsWith('dqset_'))) {
+            return v;
+          }
+        }
+      } catch (_) {}
+    }
   }
   return null;
 }
@@ -74,20 +94,30 @@ function extractBody(msg) {
  */
 function routeInteractive(body) {
   if (!body) return null;
-  if (body.startsWith('baiscope_')) {
-    return { commandName: 'baiscope', args: [body] };
+  const id = String(body).trim();
+
+  if (id.startsWith('baiscope_')) {
+    return { commandName: 'baiscope', args: [id] };
   }
-  // DARK QUEEN V2 button routing
-  if (body.startsWith('dqset_')) {
-    return { commandName: 'settings', args: [body] };
+  if (id.startsWith('dqset_')) {
+    return { commandName: 'settings', args: [id] };
   }
-  // dqcat_<category> → show that category's commands
-  if (body.startsWith('dqcat_')) {
-    return { commandName: 'menu', args: ['cat', body] };
+  // category list selection
+  if (id.startsWith('dqcat_')) {
+    return { commandName: 'menu', args: ['cat', id] };
   }
-  // dqmenu_<cmd> → any command (menu quick buttons)
-  if (body.startsWith('dqmenu_')) {
-    return { commandName: body.slice(7), args: [body] };
+  // run a command from category list (dqcmd_song → .song)
+  if (id.startsWith('dqcmd_')) {
+    const name = id.slice(6).trim().toLowerCase();
+    if (name) return { commandName: name, args: [] };
+  }
+  // quick reply shortcuts
+  if (id.startsWith('dqmenu_')) {
+    const name = id.slice(7).trim().toLowerCase();
+    if (name === 'menu' || name === 'help') {
+      return { commandName: 'menu', args: [] };
+    }
+    if (name) return { commandName: name, args: [] };
   }
   return null;
 }
