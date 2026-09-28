@@ -1,6 +1,7 @@
 const config = require('../config');
 const logger = require('../lib/logger');
 const { getCommand } = require('../lib/commandHandler');
+const { isPanelReply } = require('../lib/settingsPanelStore');
 
 const rateMap = new Map();
 
@@ -117,6 +118,10 @@ async function handleMessage(sock, msg, sessionId) {
     if (routed) {
       commandName = routed.commandName;
       args = routed.args;
+    } else if (/^[1-9]$/.test(body) && isPanelReply(msg)) {
+      // 1b) Settings panel number reply (reply "1" / "2" to the panel)
+      commandName = 'settings';
+      args = ['num', body];
     } else if (body.startsWith(config.prefix || '.')) {
       // 2) Normal prefix commands
       const parts = body.slice((config.prefix || '.').length).trim().split(/\s+/);
