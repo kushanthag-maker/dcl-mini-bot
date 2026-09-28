@@ -1,7 +1,7 @@
 /**
- * DARK QUEEN V2 — Main Menu (single message · image + list + buttons)
- * Tap a category row → that category's commands arrive as ONE message
- * (image + checkbox list + buttons). Nothing splits into parts.
+ * DARK QUEEN V2 — Main Menu
+ * .menu → PTV video note + ONE interactive message (image + categories + buttons)
+ * Category tap → that category's commands (image + checkbox list + buttons)
  */
 const config = require('../../config');
 const { getSettings } = require('../../lib/botSettings');
@@ -9,6 +9,7 @@ const { getAllCommands, getCommandsByCategory } = require('../../lib/commandHand
 const { sendQuickReplies } = require('../../lib/sendButtons');
 const moment = require('moment-timezone');
 
+const MENU_VIDEO = 'https://files.catbox.moe/jz1qbc.mp4';
 const DEFAULT_LOGO = 'https://files.catbox.moe/yjyx4x.webp';
 const DISPLAY_BOT_NAME = '𝐃𝐀𝐑𝐊 𝐐𝐔𝐄𝐄𝐍 𝐕𝟐';
 const FOOTER_DEV = 'RED DEVIL × ZAYRA DEV';
@@ -70,7 +71,7 @@ function headerText(prefix, sessionId) {
 }
 
 function categoryCommandsText(catKey, prefix) {
-  const meta = CATEGORY_META.find((c) => c.key === catKey) || { title: catKey.toUpperCase(), emoji: '🌹' };
+  const meta = CATEGORY_META.find((c) => c.key === catKey) || { title: String(catKey).toUpperCase(), emoji: '🌹' };
   const cmds = (getCommandsByCategory(catKey) || [])
     .slice()
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
@@ -79,7 +80,7 @@ function categoryCommandsText(catKey, prefix) {
     '┌─「 ' + meta.emoji + ' ' + meta.title + ' 」\n' +
     '│ ./' + catKey + '\n│\n';
   if (!cmds.length) {
-    text += '└─☐ _no commands yet_\n';
+    text += '└─☐ _no commands yet_ 🌸\n';
   } else {
     for (let j = 0; j < cmds.length; j++) {
       const name = String(cmds[j].name || '').trim();
@@ -87,11 +88,10 @@ function categoryCommandsText(catKey, prefix) {
       text += (j === cmds.length - 1 ? '└─☐ ' : '├─☐ ') + prefix + name + '\n';
     }
   }
-  text += '└─🌸 ' + DISPLAY_BOT_NAME;
-  return { text, count: cmds.length, meta };
+  return { text, meta };
 }
 
-/** ONE interactive message: image header + body + category list + quick buttons */
+/** ONE interactive message: image header + body + category list + quick buttons (no viewOnce) */
 async function sendMainMenu(sock, jid, { text, footer, title, buttonText, rows, quickButtons, imageUrl, quoted }) {
   const { generateWAMessageFromContent, prepareWAMessageMedia } = require('@whiskeysockets/baileys');
 
@@ -127,18 +127,14 @@ async function sendMainMenu(sock, jid, { text, footer, title, buttonText, rows, 
   const full = generateWAMessageFromContent(
     jid,
     {
-      viewOnceMessage: {
-        message: {
-          messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
-          interactiveMessage: {
-            body: { text: text || ' ' },
-            footer: { text: footer || '' },
-            header,
-            nativeFlowMessage: {
-              buttons: nativeFlowButtons,
-              messageParamsJson: JSON.stringify({ from: 'dark-queen-v2', v: 2 }),
-            },
-          },
+      messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+      interactiveMessage: {
+        body: { text: text || ' ' },
+        footer: { text: footer },
+        header,
+        nativeFlowMessage: {
+          buttons: nativeFlowButtons,
+          messageParamsJson: '{}',
         },
       },
     },
@@ -152,6 +148,15 @@ async function sendMainMenu(sock, jid, { text, footer, title, buttonText, rows, 
 async function showMain(sock, msg, from, sessionId) {
   const prefix = config.prefix || '.';
   const logo = getLogo(sessionId);
+
+  // PTV video note (separate, intentional)
+  try {
+    await sock.sendMessage(from, { video: { url: MENU_VIDEO }, mimetype: 'video/mp4', ptv: true }, { quoted: msg });
+  } catch (e1) {
+    try {
+      await sock.sendMessage(from, { video: { url: MENU_VIDEO }, mimetype: 'video/mp4', gifPlayback: true }, { quoted: msg });
+    } catch (_) {}
+  }
 
   const rows = [];
   for (const meta of CATEGORY_META) {
@@ -204,14 +209,13 @@ async function showCategory(sock, msg, from, catKey, sessionId) {
 module.exports = {
   name: 'menu',
   aliases: ['help', 'list', 'm', 'commands'],
-  description: 'Single-message menu: image + categories + buttons',
+  description: 'Video note + single-message menu with category buttons',
   category: 'utility',
 
   async execute({ sock, msg, from, args, sessionId }) {
     try {
       try { await sock.sendMessage(from, { react: { text: '🫧', key: msg.key } }); } catch (_) {}
 
-      // .menu cat <key>  or  button id dqcat_<key>
       const sub = String(args[0] || '');
       if (sub === 'cat' && args[1]) {
         const key = String(args[1]).replace('dqcat_', '').trim();
