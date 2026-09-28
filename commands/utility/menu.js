@@ -1,15 +1,13 @@
 /**
- * DARK QUEEN V2 — Interactive Menu
- * .menu → video note + interactive image menu (category list)
- * category tap → interactive command list for that category
+ * DARK QUEEN V2 — ONE Interactive Message menu
+ * Image header + body (tree UI) + category list — single relayMessage
+ * No split (no separate video / quick-reply spam)
  */
 const config = require('../../config');
 const { getSettings } = require('../../lib/botSettings');
 const { getAllCommands, getCommandsByCategory } = require('../../lib/commandHandler');
-const { sendSelectList, sendQuickReplies } = require('../../lib/sendButtons');
 const moment = require('moment-timezone');
 
-const MENU_VIDEO = 'https://files.catbox.moe/jz1qbc.mp4';
 const DEFAULT_LOGO = 'https://files.catbox.moe/yjyx4x.webp';
 const FOOTER = 'DARK QUEEN OFC · V2';
 const DISPLAY_BOT_NAME = '𝐃𝐀𝐑𝐊 𝐐𝐔𝐄𝐄𝐍 𝐕𝟐';
@@ -25,6 +23,10 @@ const CATEGORY_META = [
   { key: 'tools', title: 'TOOLS', emoji: '✨', order: 8 },
   { key: 'movie', title: 'MOVIE', emoji: '🌺', order: 9 },
 ];
+
+function getBaileys() {
+  return require('@whiskeysockets/baileys');
+}
 
 function getLogo(sessionId) {
   try {
@@ -45,15 +47,6 @@ function formatUptime(sec) {
   return d + 'D ' + h + 'H ' + m + 'M';
 }
 
-function greeting() {
-  const h = moment().tz(config.timezone || 'Asia/Colombo').hour();
-  if (h < 5) return '💗 Early Morning';
-  if (h < 12) return '🌸 Good Morning';
-  if (h < 18) return '🌤️ Good Afternoon';
-  if (h < 22) return '🌙 Good Evening';
-  return '🌌 Sweet Dreams';
-}
-
 function metaFor(key) {
   return (
     CATEGORY_META.find((c) => c.key === key) || {
@@ -64,7 +57,6 @@ function metaFor(key) {
   );
 }
 
-/** categories that actually have commands */
 function liveCategories() {
   const all = getAllCommands() || [];
   const counts = {};
@@ -75,7 +67,6 @@ function liveCategories() {
   const ordered = CATEGORY_META.filter((c) => counts[c.key] > 0).sort(
     (a, b) => a.order - b.order
   );
-  // any unknown folders
   for (const k of Object.keys(counts)) {
     if (!ordered.find((c) => c.key === k)) {
       ordered.push({ key: k, title: k.toUpperCase(), emoji: '📌', order: 99 });
@@ -84,7 +75,8 @@ function liveCategories() {
   return ordered.map((c) => ({ ...c, count: counts[c.key] || 0 }));
 }
 
-function mainBodyText(prefix, sessionId) {
+/** Tree UI like screenshot (single caption body) */
+function buildMainBody(prefix, sessionId) {
   const settings = (() => {
     try {
       return getSettings(sessionId) || {};
@@ -92,64 +84,149 @@ function mainBodyText(prefix, sessionId) {
       return {};
     }
   })();
-  const botName = settings.botName || config.botName || DISPLAY_BOT_NAME;
+  const botName = settings.botName || config.botName || 'Dark Queen';
   const total = (getAllCommands() || []).length;
   const ram = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
+  const now = moment().tz(config.timezone || 'Asia/Colombo').format('HH:mm');
+
   return (
-    '╭─「 🌸 *' +
-    DISPLAY_BOT_NAME +
-    '* 」\n' +
-    '│ 👑 Bot › *' +
-    botName +
-    '*\n' +
-    '│ ⚙️ Prefix › *' +
-    prefix +
-    '*\n' +
-    '│ 📦 Commands › *' +
-    total +
-    '*\n' +
-    '│ 💾 RAM › *' +
-    ram +
-    ' MB*\n' +
-    '│ ⏱️ Uptime › *' +
-    formatUptime(process.uptime()) +
-    '*\n' +
-    '│ 🌟 ' +
-    greeting() +
-    '\n' +
-    '╰──────────────\n\n' +
-    '💗 *Tap a category below*\n' +
-    '📚 Open menu list to browse'
+    '*' + DISPLAY_BOT_NAME + '*\n\n' +
+    '□ *./Informação*\n' +
+    '│\n' +
+    '├─□ Author: #ZayraDev\n' +
+    '├─□ Prefix: *' + prefix + '*\n' +
+    '├─□ Action: dark-queen.vercel.app\n' +
+    '├─□ Version: *2.0*\n' +
+    '├─□ Type: ( CommonJs )\n' +
+    '├─□ Library: *Levvleys*\n' +
+    '├─□ Bot: *' + botName + '*\n' +
+    '├─□ RAM: *' + ram + ' MB*\n' +
+    '├─□ Uptime: *' + formatUptime(process.uptime()) + '*\n' +
+    '├─□ Commands: *' + total + '*\n' +
+    '└─□ Time: *' + now + '*\n\n' +
+    '_Tap *Open Menu* → pick a category_ 🌸'
   );
 }
 
-async function sendVideoNote(sock, from, msg) {
-  try {
-    await sock.sendMessage(
-      from,
-      {
-        video: { url: MENU_VIDEO },
-        mimetype: 'video/mp4',
-        ptv: true,
-      },
-      { quoted: msg }
-    );
-    return;
-  } catch (e1) {
+function buildCategoryBody(catKey, prefix) {
+  const meta = metaFor(catKey);
+  const cmds = (getCommandsByCategory(catKey) || [])
+    .slice()
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
+  let body =
+    '*' + meta.emoji + ' ' + meta.title + '*\n\n' +
+    '□ *./' + catKey + '*\n' +
+    '│\n';
+
+  if (!cmds.length) {
+    body += '└─□ _no commands_ 🌸\n';
+  } else {
+    cmds.forEach((c, i) => {
+      const name = String(c.name || '').trim();
+      if (!name) return;
+      const last = i === cmds.length - 1;
+      body += (last ? '└─□ ' : '├─□ ') + prefix + name + '\n';
+    });
+  }
+  body += '\n_Tap a command below or type it_ 💗';
+  return { body, meta, cmds };
+}
+
+/**
+ * ONE interactive message: image + body + native flow list (+ optional quick reply)
+ */
+async function sendInteractiveMenu(sock, jid, {
+  text,
+  footer = FOOTER,
+  headerTitle = DISPLAY_BOT_NAME,
+  buttonText = 'Open Menu',
+  rows = [],
+  quickButtons = [],
+  imageUrl,
+  quoted,
+} = {}) {
+  const {
+    generateWAMessageFromContent,
+    prepareWAMessageMedia,
+  } = getBaileys();
+
+  const sections = [
+    {
+      title: headerTitle.slice(0, 24),
+      rows: (rows || []).slice(0, 10).map((r) => ({
+        header: r.header || '',
+        title: String(r.title || '').slice(0, 24),
+        description: String(r.description || '').slice(0, 72),
+        id: String(r.id),
+      })),
+    },
+  ];
+
+  const nativeFlowButtons = [
+    {
+      name: 'single_select',
+      buttonParamsJson: JSON.stringify({
+        title: buttonText,
+        sections,
+      }),
+    },
+  ];
+
+  // max ~3 total native buttons; keep 1 list + up to 2 quick
+  for (const b of (quickButtons || []).slice(0, 2)) {
+    nativeFlowButtons.push({
+      name: 'quick_reply',
+      buttonParamsJson: JSON.stringify({
+        display_text: String(b.text).slice(0, 25),
+        id: String(b.id),
+      }),
+    });
+  }
+
+  let header = {
+    title: headerTitle.slice(0, 60),
+    hasMediaAttachment: false,
+  };
+
+  if (imageUrl) {
     try {
-      await sock.sendMessage(
-        from,
-        {
-          video: { url: MENU_VIDEO },
-          mimetype: 'video/mp4',
-          gifPlayback: true,
-        },
-        { quoted: msg }
+      const media = await prepareWAMessageMedia(
+        { image: { url: imageUrl } },
+        { upload: sock.waUploadToServer }
       );
-    } catch (e2) {
-      console.error('[menu] video fail', e2.message);
+      header = {
+        title: headerTitle.slice(0, 60),
+        hasMediaAttachment: true,
+        imageMessage: media.imageMessage,
+      };
+    } catch (e) {
+      console.error('[menu] media upload', e.message);
     }
   }
+
+  const full = generateWAMessageFromContent(
+    jid,
+    {
+      messageContextInfo: {
+        deviceListMetadata: {},
+        deviceListMetadataVersion: 2,
+      },
+      interactiveMessage: {
+        body: { text: text || ' ' },
+        footer: { text: footer },
+        header,
+        nativeFlowMessage: {
+          buttons: nativeFlowButtons,
+          messageParamsJson: '{}',
+        },
+      },
+    },
+    { userJid: sock.user?.id, quoted }
+  );
+
+  await sock.relayMessage(jid, full.message, { messageId: full.key.id });
+  return full;
 }
 
 async function showMain(sock, msg, from, sessionId) {
@@ -157,131 +234,65 @@ async function showMain(sock, msg, from, sessionId) {
   const logo = getLogo(sessionId);
   const cats = liveCategories();
 
-  await sendVideoNote(sock, from, msg);
-
-  const rows = cats.map((c) => ({
+  const rows = cats.slice(0, 10).map((c) => ({
     id: 'dqcat_' + c.key,
     title: (c.emoji + ' ' + c.title).slice(0, 24),
-    description: c.count + ' commands',
+    description: (c.count || 0) + ' commands',
   }));
 
-  // WhatsApp list max ~10 rows practical; slice if needed
-  const listRows = rows.slice(0, 10);
-
-  try {
-    await sendSelectList(sock, from, {
-      text: mainBodyText(prefix, sessionId),
-      footer: FOOTER,
-      title: 'Categories',
-      buttonText: '📂 Open Categories',
-      rows: listRows,
-      imageUrl: logo,
-      quoted: msg,
-    });
-  } catch (err) {
-    console.error('[menu] interactive main fail', err.message);
-    // fallback text
-    let t = mainBodyText(prefix, sessionId) + '\n\n';
-    cats.forEach((c, i) => {
-      t += '*' + (i + 1) + '.* ' + c.emoji + ' ' + c.title + ' (' + c.count + ')\n';
-    });
-    t += '\nUse `' + prefix + 'menu cat <name>` e.g. `' + prefix + 'menu cat download`';
-    await sock.sendMessage(from, { image: { url: logo }, caption: t }, { quoted: msg });
-  }
-
-  // extra quick replies (max 3 total if mixed — send separate)
-  try {
-    await sendQuickReplies(sock, from, {
-      text: '⚡ *Quick access*',
-      footer: FOOTER,
-      imageUrl: logo,
-      buttons: [
-        { id: 'dqmenu_menu', text: '🔄 Refresh Menu' },
-        { id: 'dqmenu_ping', text: '📡 Ping' },
-        { id: 'dqmenu_alive', text: '💗 Alive' },
-      ],
-      quoted: msg,
-    });
-  } catch (_) {}
+  await sendInteractiveMenu(sock, from, {
+    text: buildMainBody(prefix, sessionId),
+    footer: FOOTER,
+    headerTitle: DISPLAY_BOT_NAME,
+    buttonText: '📂 Open Menu',
+    rows,
+    quickButtons: [
+      { id: 'dqmenu_ping', text: '📡 Ping' },
+      { id: 'dqmenu_alive', text: '💗 Alive' },
+    ],
+    imageUrl: logo,
+    quoted: msg,
+  });
 }
 
 async function showCategory(sock, msg, from, catKey, sessionId) {
   const prefix = config.prefix || '.';
   const logo = getLogo(sessionId);
-  const meta = metaFor(catKey);
-  const cmds = (getCommandsByCategory(catKey) || [])
-    .slice()
-    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const { body, meta, cmds } = buildCategoryBody(catKey, prefix);
 
-  let body =
-    '╭─「 ' +
-    meta.emoji +
-    ' *' +
-    meta.title +
-    '* 」\n' +
-    '│ Category › *' +
-    catKey +
-    '*\n' +
-    '│ Commands › *' +
-    cmds.length +
-    '*\n' +
-    '╰──────────────\n\n' +
-    '👇 *Select a command* or type `' +
-    prefix +
-    'cmd`';
-
-  // list rows — each command selectable (max ~10 shown, rest in description)
-  const rows = cmds.slice(0, 10).map((c) => ({
+  const rows = (cmds || []).slice(0, 10).map((c) => ({
     id: 'dqcmd_' + c.name,
     title: (prefix + c.name).slice(0, 24),
-    description: String(c.description || c.name).slice(0, 72),
+    description: String(c.description || 'Run command').slice(0, 72),
   }));
 
   if (!rows.length) {
     rows.push({
       id: 'dqmenu_menu',
-      title: 'Back to menu',
-      description: 'No commands in this category',
+      title: 'Main Menu',
+      description: 'No commands here',
     });
   }
 
-  try {
-    await sendSelectList(sock, from, {
-      text: body,
-      footer: meta.emoji + ' ' + meta.title + ' · ' + FOOTER,
-      title: meta.title,
-      buttonText: '📋 Commands',
-      rows: rows,
-      imageUrl: logo,
-      quoted: msg,
-    });
-  } catch (err) {
-    console.error('[menu] category interactive fail', err.message);
-    let t = body + '\n\n';
-    cmds.forEach((c) => {
-      t += '• `' + prefix + c.name + '`\n';
-    });
-    await sock.sendMessage(from, { image: { url: logo }, caption: t }, { quoted: msg });
-  }
-
-  try {
-    await sendQuickReplies(sock, from, {
-      text: '🧭 *Navigate*',
-      footer: FOOTER,
-      buttons: [
-        { id: 'dqmenu_menu', text: '⬅️ Main Menu' },
-        { id: 'dqcat_' + catKey, text: '🔄 Refresh' },
-        { id: 'dqmenu_ping', text: '📡 Ping' },
-      ],
-      quoted: msg,
-    });
-  } catch (_) {}
+  await sendInteractiveMenu(sock, from, {
+    text: body,
+    footer: meta.emoji + ' ' + meta.title + ' · ' + FOOTER,
+    headerTitle: meta.emoji + ' ' + meta.title,
+    buttonText: '📋 Commands',
+    rows,
+    quickButtons: [
+      { id: 'dqmenu_menu', text: '⬅️ Menu' },
+      { id: 'dqcat_' + catKey, text: '🔄 Refresh' },
+    ],
+    imageUrl: logo,
+    quoted: msg,
+  });
 }
 
 module.exports = {
   name: 'menu',
   aliases: ['help', 'list', 'm', 'commands'],
-  description: 'Interactive video + image category menu',
+  description: 'Single interactive image menu',
   category: 'utility',
 
   async execute({ sock, msg, from, args, sessionId }) {
@@ -293,15 +304,12 @@ module.exports = {
       const a0 = String(args[0] || '').trim();
       const a1 = String(args[1] || '').trim();
 
-      // .menu cat download   OR interactive dqcat_download as args
       if (a0 === 'cat' || a0.startsWith('dqcat_')) {
         const key = (a0.startsWith('dqcat_') ? a0 : a1)
           .replace(/^dqcat_/, '')
           .trim()
           .toLowerCase();
-        if (!key) {
-          return showMain(sock, msg, from, sessionId);
-        }
+        if (!key) return await showMain(sock, msg, from, sessionId);
         return await showCategory(sock, msg, from, key, sessionId);
       }
 
