@@ -47,7 +47,6 @@ function extractBody(msg) {
   else if (messageType === 'imageMessage') body = msg.message.imageMessage?.caption || '';
   else if (messageType === 'videoMessage') body = msg.message.videoMessage?.caption || '';
   else if (messageType === 'buttonsResponseMessage') {
-    // Prefer button ID so commands can route (not display text)
     body =
       msg.message.buttonsResponseMessage?.selectedButtonId ||
       msg.message.buttonsResponseMessage?.selectedDisplayText ||
@@ -71,7 +70,6 @@ function extractBody(msg) {
 
 /**
  * Map interactive ids → command invocation
- * e.g. baiscope_s_0 → command baiscope, args [baiscope_s_0]
  */
 function routeInteractive(body) {
   if (!body) return null;
@@ -79,9 +77,12 @@ function routeInteractive(body) {
     return { commandName: 'baiscope', args: [body] };
   }
   // DARK QUEEN V2 button routing
-  // dqset_* → settings command (toggle/refresh)
   if (body.startsWith('dqset_')) {
     return { commandName: 'settings', args: [body] };
+  }
+  // dqcat_<category> → show that category's commands
+  if (body.startsWith('dqcat_')) {
+    return { commandName: 'menu', args: ['cat', body] };
   }
   // dqmenu_<cmd> → any command (menu quick buttons)
   if (body.startsWith('dqmenu_')) {
