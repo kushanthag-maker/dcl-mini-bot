@@ -1,7 +1,6 @@
 /**
- * DARK QUEEN V2 — Main Menu (polished UI)
- * .menu → PTV video note + ONE card (big logo on top + tree text + list + buttons)
- * Category tap → ONE card (logo on top + that category's commands + buttons)
+ * DARK QUEEN V2 — Main Menu (STATUS PANEL UI + full command list in one card)
+ * .menu → PTV video note + ONE card (logo + panel + ALL commands + list + buttons)
  */
 const config = require('../../config');
 const { getSettings } = require('../../lib/botSettings');
@@ -50,13 +49,15 @@ function greeting() {
   return '🌌 Sweet Dreams';
 }
 
-function headerText(prefix, sessionId) {
+/** Full menu text: STATUS PANEL header + every category + every command */
+function buildMenuText(prefix, sessionId) {
   const settings = (() => { try { return getSettings(sessionId) || {}; } catch { return {}; } })();
   const botName = settings.botName || config.botName || 'Dark Queen';
   const totalCmds = (getAllCommands() || []).length;
   const ram = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2) + ' MB';
   const now = moment().tz(config.timezone || 'Asia/Colombo');
-  return (
+
+  let text =
     '🍟 WELCOME TO DARK QUEEN\n' +
     '👑\n' +
     '┌─「 🌸 STATUS PANEL 」\n' +
@@ -71,9 +72,25 @@ function headerText(prefix, sessionId) {
     '│ 📦 Commands : ' + totalCmds + '\n' +
     '│ ⚙️ Prefix : ' + prefix + '\n' +
     '│ 🛡️ Library : Levvleys\n' +
-    '└─🌸 Select a category 👇'
-  );
+    '└─────────────⳹\n';
+
+  for (const meta of CATEGORY_META) {
+    const cmds = (getCommandsByCategory(meta.key) || [])
+      .map((c) => String(c.name || '').trim())
+      .filter(Boolean)
+      .sort();
+    if (!cmds.length) continue;
+
+    text += '\n┌─「 ' + meta.emoji + ' ' + meta.title + ' 」\n';
+    for (let j = 0; j < cmds.length; j++) {
+      text += (j === cmds.length - 1 ? '└─☐ ' : '├─☐ ') + prefix + cmds[j] + '\n';
+    }
+  }
+
+  text += '\n└─🌸 ' + DISPLAY_BOT_NAME + ' · Tap a button 👇';
+  return text;
 }
+
 function categoryCommandsText(catKey, prefix) {
   const meta = CATEGORY_META.find((c) => c.key === catKey) || { title: String(catKey).toUpperCase(), emoji: '🌹' };
   const cmds = (getCommandsByCategory(catKey) || [])
@@ -120,7 +137,6 @@ async function sendMainMenu(sock, jid, { text, footer, title, buttonText, rows, 
     });
   }
 
-  // SHORT title → WhatsApp renders the image BIG on top
   let header = { title: '𝐃𝐐·𝐕𝟐', hasMediaAttachment: false };
   if (imageUrl) {
     try {
@@ -163,6 +179,9 @@ async function showMain(sock, msg, from, sessionId) {
     } catch (_) {}
   }
 
+  const menuText = buildMenuText(prefix, sessionId);
+
+  // List rows: one per category (jump straight to it)
   const rows = [];
   for (const meta of CATEGORY_META) {
     const cmds = (getCommandsByCategory(meta.key) || [])
@@ -170,16 +189,15 @@ async function showMain(sock, msg, from, sessionId) {
       .filter(Boolean)
       .sort();
     if (!cmds.length) continue;
-    const preview = cmds.slice(0, 4).map((n) => prefix + n).join(' · ');
     rows.push({
       id: 'dqcat_' + meta.key,
       title: meta.emoji + ' ' + meta.title,
-      description: cmds.length + ' cmds · ' + preview,
+      description: cmds.length + ' cmds',
     });
   }
 
   await sendMainMenu(sock, from, {
-    text: headerText(prefix, sessionId),
+    text: menuText,
     footer: FOOTER_TEXT,
     title: '📂 Categories',
     buttonText: '🌸 Open Menu',
@@ -214,7 +232,7 @@ async function showCategory(sock, msg, from, catKey, sessionId) {
 module.exports = {
   name: 'menu',
   aliases: ['help', 'list', 'm', 'commands'],
-  description: 'Video note + polished single-card menu',
+  description: 'Video note + one-card menu with ALL commands',
   category: 'utility',
 
   async execute({ sock, msg, from, args, sessionId }) {
